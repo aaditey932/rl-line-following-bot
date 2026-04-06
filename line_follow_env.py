@@ -46,8 +46,10 @@ FRONT_CASTER_ROLL_FORCE = 1.5
 # Reward (IR + motor command penalty; no ground-truth path pose)
 ALIVE_BONUS = 0.02
 IR_SENSOR_LATERAL_WEIGHT = 1.2
-IR_PROGRESS_WEIGHT = 0.35
-WHEEL_CMD_PENALTY_WEIGHT = 0.015  # squared normalized delayed actions (smoothness)
+IR_PROGRESS_WEIGHT = 0.8
+FORWARD_ACCEL_REWARD_WEIGHT = 0.25
+WHEEL_CMD_PENALTY_WEIGHT = 0.01  # squared normalized delayed actions (smoothness)
+WHEEL_CMD_JITTER_PENALTY_WEIGHT = 0.01  # squared step-to-step change in applied motor command
 # Lateral termination uses strict `abs(lat) > IR_TERMINATE_LATERAL_NORM` in step(). With default 1.0,
 # lateral done is off: for 2 IR sensors, whenever line strength is high enough for reset, the
 # centroid lateral signal is typically saturated at |lat|==1.0, so threshold 0.92 caused ep_len=1.
@@ -65,6 +67,7 @@ RESET_MAX_PERP_M = 0.14
 RESET_MAX_YAW_ERR_RAD = 0.38
 RESET_POSE_TRIES = 60
 RESET_MIN_LINE_STRENGTH_MULT = 2.0
+RESET_MIN_SINGLE_SENSOR_STRENGTH_MULT = 2.0
 RESET_FALLBACK_PERP_M = (0.0, 0.06, -0.06, 0.1, -0.1, 0.12, -0.12)
 
 # Visual line strip (world-aligned box; half-width perpendicular to path)
@@ -220,14 +223,20 @@ class LineFollowEnv(gym.Env):
         self.path_offset_range = path_offset_range
         self.n_ir_sensors = max(1, int(n_ir_sensors))
         self.line_half_width = float(line_half_width)
+        self.ir_sensor_x_body = float(ir_sensor_x_body)
+        self.ir_sensor_y_span = float(ir_sensor_y_span)
+        if self.n_ir_sensors == 2 and np.isclose(self.ir_sensor_y_span, DEFAULT_IR_SENSOR_Y_SPAN):
+            # For a 2-sensor array, keep the sensors close enough that a centered narrow line does
+            # not fall into the gap and appear "lost" despite the chassis looking visually aligned.
+            self.ir_sensor_y_span = min(self.ir_sensor_y_span, max(0.04, 1.6 * self.line_half_width))
         ys = np.linspace(
-            -0.5 * ir_sensor_y_span,
-            0.5 * ir_sensor_y_span,
+            -0.5 * self.ir_sensor_y_span,
+            0.5 * self.ir_sensor_y_span,
             self.n_ir_sensors,
             dtype=np.float64,
         )
         self._ir_sensor_body = np.stack(
-            [np.full(self.n_ir_sensors, ir_sensor_x_body, dtype=np.float64), ys, np.zeros(self.n_ir_sensors)],
+            [np.full(self.n_ir_sensors, self.ir_sensor_x_body, dtype=np.float64), ys, np.zeros(self.n_ir_sensors)],
             axis=1,
         )
 
@@ -260,12 +269,12 @@ class LineFollowEnv(gym.Env):
         self._omega_left = 0.0
         self._omega_right = 0.0
         self._last_cmd = np.zeros(2, dtype=np.float64)
+        self._prev_applied_cmd = np.zeros(2, dtype=np.float64)
         self._step_count = 0
         self._path_theta = 0.0
         self._path_offset = 0.0
         self._action_history: list[np.ndarray] = []
         self._debug_line_id: Optional[int] = None
-        self._last_view_matrix: Optional[tuple] = None
         self._line_body_id: Optional[int] = None
         self._line_lost_counter = 0
         self.gui_camera_mode = gui_camera_mode
@@ -278,6 +287,7 @@ class LineFollowEnv(gym.Env):
         self._verbose_episode = bool(verbose_episode)
         self._episode_idx = 0
         self._episode_return = 0.0
+        self._prev_forward_speed = 0.0
         self._wheel_vel_max = float(WHEEL_VEL_MAX)
         self._motor_force = float(MAX_MOTOR_FORCE)
         self._motor_u_left = 0.0
@@ -729,8 +739,6 @@ class LineFollowEnv(gym.Env):
         dx, dy = float(np.cos(yaw)), float(np.sin(yaw))
         camera_eye = [px, py, pz + 0.2]
         camera_target = [px + dx, py + dy, pz]
-        view_matrix = p.computeViewMatrix(camera_eye, camera_target, [0, 0, 1])
-        self._last_view_matrix = view_matrix
         delta = np.array(camera_eye, dtype=np.float64) - np.array(camera_target, dtype=np.float64)
         dist = float(np.linalg.norm(delta)) + 1e-9
         cam_yaw = float(np.degrees(np.arctan2(delta[1], delta[0])))
@@ -859,6 +867,14 @@ class LineFollowEnv(gym.Env):
         _r_lo, r_hi = self._ir_scene_reflectance_bounds()
         return float(np.sum(np.maximum(0.0, r_hi - np.asarray(r, dtype=np.float64))))
 
+    def _reset_pose_has_learnable_signal(self, r: np.ndarray) -> bool:
+        """Require a reset pose where the line is not only visible, but clearly under at least one sensor."""
+        _r_lo, r_hi = self._ir_scene_reflectance_bounds()
+        darkness = np.maximum(0.0, r_hi - np.asarray(r, dtype=np.float64))
+        min_total = IR_LINE_STRENGTH_EPS * max(1, self.n_ir_sensors) * RESET_MIN_LINE_STRENGTH_MULT
+        min_single = IR_LINE_STRENGTH_EPS * RESET_MIN_SINGLE_SENSOR_STRENGTH_MULT
+        return float(np.sum(darkness)) >= min_total and float(np.max(darkness, initial=0.0)) >= min_single
+
     def _place_robot_on_path(self) -> None:
         """Place base on/near the line with small random error; ensure IR sees part of the strip."""
         assert self._robot is not None
@@ -867,7 +883,6 @@ class LineFollowEnv(gym.Env):
         ux, uy = self._path_tangent()
         fx = self._path_offset * nx
         fy = self._path_offset * ny
-        min_strength = IR_LINE_STRENGTH_EPS * max(1, self.n_ir_sensors) * RESET_MIN_LINE_STRENGTH_MULT
         z = 0.08
 
         def try_pose(s0: float, eps: float, yaw: float) -> bool:
@@ -877,7 +892,7 @@ class LineFollowEnv(gym.Env):
             p.resetBasePositionAndOrientation(self._robot, [x, y, z], orn)
             p.resetBaseVelocity(self._robot, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
             refl = self._compute_ir_reflectance(add_noise=False)
-            return self._line_strength_from_reflectance(refl) >= min_strength
+            return self._reset_pose_has_learnable_signal(refl)
 
         for _ in range(RESET_POSE_TRIES):
             s0 = float(rng.uniform(-RESET_ALONG_RANGE_M, RESET_ALONG_RANGE_M))
@@ -932,10 +947,12 @@ class LineFollowEnv(gym.Env):
         self._omega_left = 0.0
         self._omega_right = 0.0
         self._last_cmd = np.zeros(2, dtype=np.float64)
+        self._prev_applied_cmd = np.zeros(2, dtype=np.float64)
 
         self._step_count = 0
         self._line_lost_counter = 0
         self._episode_return = 0.0
+        self._prev_forward_speed = 0.0
         self._episode_idx += 1
         self._draw_line_debug()
         self._update_debug_visualizer_camera()
@@ -1052,6 +1069,9 @@ class LineFollowEnv(gym.Env):
         assert self._robot is not None
         cmd = self._motor_command(np.asarray(action, dtype=np.float32))
         self._last_cmd = cmd.astype(np.float64).copy()
+        cmd_delta = self._last_cmd - self._prev_applied_cmd
+        cmd_jitter = float(np.dot(cmd_delta, cmd_delta))
+        self._prev_applied_cmd = self._last_cmd.copy()
         self._apply_drive_command(cmd)
         for _ in range(SUBSTEPS):
             p.stepSimulation()
@@ -1059,6 +1079,10 @@ class LineFollowEnv(gym.Env):
         _, orn = p.getBasePositionAndOrientation(self._robot)
 
         v_body = self._body_linear_velocity(orn)
+        forward_speed = float(v_body[0])
+        forward_accel = forward_speed - float(self._prev_forward_speed)
+        forward_accel_bonus = max(0.0, forward_accel)
+        self._prev_forward_speed = forward_speed
 
         r = self._compute_ir_reflectance(add_noise=True)
         lat = self._lateral_norm_from_ir(r)
@@ -1076,8 +1100,10 @@ class LineFollowEnv(gym.Env):
 
         reward = float(
             -IR_SENSOR_LATERAL_WEIGHT * abs(lat)
-            + IR_PROGRESS_WEIGHT * float(v_body[0])
+            + IR_PROGRESS_WEIGHT * forward_speed
+            + FORWARD_ACCEL_REWARD_WEIGHT * forward_accel_bonus
             - WHEEL_CMD_PENALTY_WEIGHT * float(cmd[0] ** 2 + cmd[1] ** 2)
+            - WHEEL_CMD_JITTER_PENALTY_WEIGHT * cmd_jitter
             + ALIVE_BONUS
         )
         lat_fail = abs(lat) > IR_TERMINATE_LATERAL_NORM
@@ -1095,25 +1121,38 @@ class LineFollowEnv(gym.Env):
             self._update_debug_visualizer_camera()
             self._update_ir_gui(obs)
 
+        reason = None
+        if truncated and not terminated:
+            reason = "max_steps"
+        elif lat_fail and line_lost_fail:
+            reason = "lateral+line_lost"
+        elif lat_fail:
+            reason = "lateral"
+        elif line_lost_fail:
+            reason = "line_lost"
+
+        info = {
+            "lateral_norm": float(lat),
+            "forward_speed": forward_speed,
+            "forward_accel": float(forward_accel),
+            "cmd_jitter": cmd_jitter,
+            "line_strength": float(line_strength),
+            "line_lost_count": int(self._line_lost_counter),
+            "termination_reason": reason,
+        }
+
         if self._verbose_episode and (terminated or truncated):
-            if truncated and not terminated:
-                reason = "max_steps"
-            elif lat_fail and line_lost_fail:
-                reason = "lateral+line_lost"
-            elif lat_fail:
-                reason = "lateral"
-            else:
-                reason = "line_lost"
             print(
                 f"[LineFollowEnv] episode {self._episode_idx} END   | "
                 f"steps={self._step_count}  return={self._episode_return:.3f}  "
                 f"terminated={terminated}  truncated={truncated}  reason={reason}  "
-                f"|lat|={abs(lat):.3f}  line_lost_count={self._line_lost_counter}  "
+                f"|lat|={abs(lat):.3f}  line_strength={line_strength:.3f}  "
+                f"line_lost_count={self._line_lost_counter}  "
                 f"last_reward={float(reward):.4f}",
                 flush=True,
             )
 
-        return obs, float(reward), terminated, truncated, {}
+        return obs, float(reward), terminated, truncated, info
 
     def render(self) -> None:
         if self.render_mode == "human":

@@ -143,13 +143,23 @@ def main() -> None:
         obs, _ = env.reset(seed=args.seed + ep)
 
         total_r = 0.0
+        end_info = {}
         while True:
             action, _ = model.predict(obs, deterministic=args.deterministic)
-            obs, reward, term, trunc, _ = env.step(action)
+            obs, reward, term, trunc, info = env.step(action)
             total_r += float(reward)
             if term or trunc:
+                end_info = info
                 break
-        print(f"episode {ep + 1}: return = {total_r:.3f}")
+        reason = end_info.get("termination_reason")
+        lat = end_info.get("lateral_norm")
+        strength = end_info.get("line_strength")
+        lost = end_info.get("line_lost_count")
+        print(
+            f"episode {ep + 1}: return = {total_r:.3f}  "
+            f"reason = {reason}  lat = {lat:.3f}  line_strength = {strength:.3f}  "
+            f"line_lost_count = {lost}"
+        )
 
     env.close()
 

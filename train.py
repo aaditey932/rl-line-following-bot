@@ -76,7 +76,7 @@ class ExplorationDecayCallback(BaseCallback):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PPO line-following in PyBullet (IR observations)")
-    parser.add_argument("--timesteps", type=int, default=100_000, help="PPO learn steps")
+    parser.add_argument("--timesteps", type=int, default=100_0000, help="PPO learn steps")
     parser.add_argument(
         "--save",
         type=str,
