@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy to my_sim2real.json and pass --sim2real-config my_sim2real.json. Keys mirror Sim2RealConfig.",
+  "motor_dynamics": "pwm_first_order",
+  "motor_deadband": 0.04,
+  "motor_slew_rate_per_s": 10.0,
+  "motor_time_constant_s": 0.1,
+  "pwm_discrete_levels": 0,
+  "domain_randomization": false,
+  "motor_force_scale_range": [0.85, 1.15],
+  "wheel_vel_max_scale_range": [0.9, 1.1],
+  "wheel_joint_damping_range": [0.0, 0.25]
+}
