@@ -37,10 +37,10 @@ URDF_PATH = ROOT / "robots" / "diff_drive.urdf"
 CONTROL_FREQUENCY = 50.0
 TIMESTEP = 1.0 / 240.0
 SUBSTEPS = max(1, int(round((1.0 / CONTROL_FREQUENCY) / TIMESTEP)))
-WHEEL_VEL_MAX = 12.0
-MAX_MOTOR_FORCE = 5.0
+WHEEL_VEL_MAX = 18.0
+MAX_MOTOR_FORCE = 7.5
 # Per-wheel angular acceleration (rad/s^2) when |action|=1; integrated at CONTROL_FREQUENCY
-MAX_WHEEL_ANG_ACCEL = 32.0
+MAX_WHEEL_ANG_ACCEL = 48.0
 FRONT_CASTER_ROLL_FORCE = 1.5
 
 # Reward (IR + motor command penalty; no ground-truth path pose)
@@ -190,6 +190,78 @@ class Sim2RealConfig:
         return replace(cfg, **kwargs)
 
 
+@dataclass
+class EnvConfig:
+    max_episode_steps: int = 500
+    randomize_path: bool = False
+    path_theta_range: tuple[float, float] = (-np.pi, np.pi)
+    path_offset_range: tuple[float, float] = (-0.15, 0.15)
+    n_ir_sensors: int = 2
+    line_half_width: float = DEFAULT_LINE_HALF_WIDTH
+    ir_sensor_x_body: float = DEFAULT_IR_SENSOR_X
+    ir_sensor_y_span: float = DEFAULT_IR_SENSOR_Y_SPAN
+    wheel_vel_max: float = WHEEL_VEL_MAX
+    max_motor_force: float = MAX_MOTOR_FORCE
+    max_wheel_ang_accel: float = MAX_WHEEL_ANG_ACCEL
+    front_caster_roll_force: float = FRONT_CASTER_ROLL_FORCE
+    alive_bonus: float = ALIVE_BONUS
+    ir_sensor_lateral_weight: float = IR_SENSOR_LATERAL_WEIGHT
+    ir_progress_weight: float = IR_PROGRESS_WEIGHT
+    forward_accel_reward_weight: float = FORWARD_ACCEL_REWARD_WEIGHT
+    wheel_cmd_penalty_weight: float = WHEEL_CMD_PENALTY_WEIGHT
+    wheel_cmd_jitter_penalty_weight: float = WHEEL_CMD_JITTER_PENALTY_WEIGHT
+    ir_terminate_lateral_norm: float = IR_TERMINATE_LATERAL_NORM
+    ir_lost_consecutive_steps: int = IR_LOST_CONSECUTIVE_STEPS
+    ir_line_strength_eps: float = IR_LINE_STRENGTH_EPS
+    ir_line_lost_strength_mult: float = IR_LINE_LOST_STRENGTH_MULT
+    reset_along_range_m: float = RESET_ALONG_RANGE_M
+    reset_max_perp_m: float = RESET_MAX_PERP_M
+    reset_max_yaw_err_rad: float = RESET_MAX_YAW_ERR_RAD
+    reset_pose_tries: int = RESET_POSE_TRIES
+    reset_min_line_strength_mult: float = RESET_MIN_LINE_STRENGTH_MULT
+    reset_min_single_sensor_strength_mult: float = RESET_MIN_SINGLE_SENSOR_STRENGTH_MULT
+    reset_fallback_perp_m: tuple[float, ...] = RESET_FALLBACK_PERP_M
+
+    @staticmethod
+    def merge_json(path: Path | str, base: Optional["EnvConfig"] = None) -> "EnvConfig":
+        """Load JSON object and merge into `base` (default: new EnvConfig). Unknown keys ignored."""
+        cfg = EnvConfig() if base is None else base
+        p = Path(path)
+        with p.open(encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            raise ValueError(f"EnvConfig JSON must be an object: {p}")
+        allowed = {f.name for f in fields(EnvConfig)}
+        kwargs: dict[str, Any] = {}
+        tuple2_fields = {
+            "path_theta_range",
+            "path_offset_range",
+        }
+        int_fields = {
+            "max_episode_steps",
+            "n_ir_sensors",
+            "ir_lost_consecutive_steps",
+            "reset_pose_tries",
+        }
+        bool_fields = {"randomize_path"}
+        for k, v in raw.items():
+            if k.startswith("_") or k not in allowed:
+                continue
+            if k in tuple2_fields:
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    kwargs[k] = (float(v[0]), float(v[1]))
+            elif k == "reset_fallback_perp_m":
+                if isinstance(v, (list, tuple)):
+                    kwargs[k] = tuple(float(x) for x in v)
+            elif k in bool_fields:
+                kwargs[k] = bool(v)
+            elif k in int_fields:
+                kwargs[k] = int(v)
+            else:
+                kwargs[k] = float(v) if isinstance(v, (int, float)) else v
+        return replace(cfg, **kwargs)
+
+
 class LineFollowEnv(gym.Env):
     metadata = {"render_modes": ["human", None]}
 
@@ -198,6 +270,7 @@ class LineFollowEnv(gym.Env):
         render_mode: Optional[str] = None,
         max_episode_steps: int = 500,
         sim2real: Optional[Sim2RealConfig] = None,
+        env_config: Optional[EnvConfig] = None,
         *,
         randomize_path: bool = False,
         path_theta_range: tuple[float, float] = (-np.pi, np.pi),
@@ -215,16 +288,26 @@ class LineFollowEnv(gym.Env):
         verbose_episode: bool = False,
     ):
         super().__init__()
+        self.env_config = env_config or EnvConfig(
+            max_episode_steps=max_episode_steps,
+            randomize_path=randomize_path,
+            path_theta_range=path_theta_range,
+            path_offset_range=path_offset_range,
+            n_ir_sensors=n_ir_sensors,
+            line_half_width=line_half_width,
+            ir_sensor_x_body=ir_sensor_x_body,
+            ir_sensor_y_span=ir_sensor_y_span,
+        )
         self.render_mode = render_mode
-        self.max_episode_steps = max_episode_steps
+        self.max_episode_steps = int(self.env_config.max_episode_steps)
         self.sim2real = sim2real or Sim2RealConfig()
-        self.randomize_path = randomize_path
-        self.path_theta_range = path_theta_range
-        self.path_offset_range = path_offset_range
-        self.n_ir_sensors = max(1, int(n_ir_sensors))
-        self.line_half_width = float(line_half_width)
-        self.ir_sensor_x_body = float(ir_sensor_x_body)
-        self.ir_sensor_y_span = float(ir_sensor_y_span)
+        self.randomize_path = bool(self.env_config.randomize_path)
+        self.path_theta_range = tuple(self.env_config.path_theta_range)
+        self.path_offset_range = tuple(self.env_config.path_offset_range)
+        self.n_ir_sensors = max(1, int(self.env_config.n_ir_sensors))
+        self.line_half_width = float(self.env_config.line_half_width)
+        self.ir_sensor_x_body = float(self.env_config.ir_sensor_x_body)
+        self.ir_sensor_y_span = float(self.env_config.ir_sensor_y_span)
         if self.n_ir_sensors == 2 and np.isclose(self.ir_sensor_y_span, DEFAULT_IR_SENSOR_Y_SPAN):
             # For a 2-sensor array, keep the sensors close enough that a centered narrow line does
             # not fall into the gap and appear "lost" despite the chassis looking visually aligned.
@@ -637,7 +720,7 @@ class LineFollowEnv(gym.Env):
             return 0.0
         w = np.maximum(0.0, r_hi - r)
         s = float(np.sum(w))
-        if s < IR_LINE_STRENGTH_EPS:
+        if s < float(self.env_config.ir_line_strength_eps):
             return 0.0
         idx = np.arange(n, dtype=np.float64)
         c = float(np.sum(w * idx) / s)
@@ -808,8 +891,8 @@ class LineFollowEnv(gym.Env):
         ll, lr = self._rear_wheel_link_indices()
         if not self.sim2real.domain_randomization:
             p.setGravity(0, 0, -9.81)
-            self._wheel_vel_max = float(WHEEL_VEL_MAX)
-            self._motor_force = float(MAX_MOTOR_FORCE)
+            self._wheel_vel_max = float(self.env_config.wheel_vel_max)
+            self._motor_force = float(self.env_config.max_motor_force)
             p.changeDynamics(self._robot, ll, jointDamping=0.0)
             p.changeDynamics(self._robot, lr, jointDamping=0.0)
             return
@@ -820,8 +903,8 @@ class LineFollowEnv(gym.Env):
         wv_s = r.uniform(*self.sim2real.wheel_vel_max_scale_range)
         damp = r.uniform(*self.sim2real.wheel_joint_damping_range)
         p.setGravity(0, 0, gz)
-        self._motor_force = float(MAX_MOTOR_FORCE * mf_s)
-        self._wheel_vel_max = float(WHEEL_VEL_MAX * wv_s)
+        self._motor_force = float(self.env_config.max_motor_force * mf_s)
+        self._wheel_vel_max = float(self.env_config.wheel_vel_max * wv_s)
         p.changeDynamics(self._robot, -1, mass=1.0 * mass_scale, lateralFriction=lat_fric)
         p.changeDynamics(self._robot, ll, jointDamping=float(damp))
         p.changeDynamics(self._robot, lr, jointDamping=float(damp))
@@ -850,7 +933,9 @@ class LineFollowEnv(gym.Env):
         self._motor_u_right = 0.0
         self._last_cmd = np.zeros(2, dtype=np.float64)
         self._apply_domain_randomization()
-        caster_f = FRONT_CASTER_ROLL_FORCE * (self._motor_force / max(MAX_MOTOR_FORCE, 1e-9))
+        caster_f = float(self.env_config.front_caster_roll_force) * (
+            self._motor_force / max(float(self.env_config.max_motor_force), 1e-9)
+        )
         wheel_js = self._rear_wheel_joints + [self._front_caster_joint]
         forces = [self._motor_force, self._motor_force, caster_f]
         for j, f in zip(wheel_js, forces):
@@ -871,8 +956,15 @@ class LineFollowEnv(gym.Env):
         """Require a reset pose where the line is not only visible, but clearly under at least one sensor."""
         _r_lo, r_hi = self._ir_scene_reflectance_bounds()
         darkness = np.maximum(0.0, r_hi - np.asarray(r, dtype=np.float64))
-        min_total = IR_LINE_STRENGTH_EPS * max(1, self.n_ir_sensors) * RESET_MIN_LINE_STRENGTH_MULT
-        min_single = IR_LINE_STRENGTH_EPS * RESET_MIN_SINGLE_SENSOR_STRENGTH_MULT
+        min_total = (
+            float(self.env_config.ir_line_strength_eps)
+            * max(1, self.n_ir_sensors)
+            * float(self.env_config.reset_min_line_strength_mult)
+        )
+        min_single = (
+            float(self.env_config.ir_line_strength_eps)
+            * float(self.env_config.reset_min_single_sensor_strength_mult)
+        )
         return float(np.sum(darkness)) >= min_total and float(np.max(darkness, initial=0.0)) >= min_single
 
     def _place_robot_on_path(self) -> None:
@@ -894,15 +986,18 @@ class LineFollowEnv(gym.Env):
             refl = self._compute_ir_reflectance(add_noise=False)
             return self._reset_pose_has_learnable_signal(refl)
 
-        for _ in range(RESET_POSE_TRIES):
-            s0 = float(rng.uniform(-RESET_ALONG_RANGE_M, RESET_ALONG_RANGE_M))
-            eps = float(rng.uniform(-RESET_MAX_PERP_M, RESET_MAX_PERP_M))
-            yaw = float(self._path_theta + rng.uniform(-RESET_MAX_YAW_ERR_RAD, RESET_MAX_YAW_ERR_RAD))
+        for _ in range(int(self.env_config.reset_pose_tries)):
+            s0 = float(rng.uniform(-float(self.env_config.reset_along_range_m), float(self.env_config.reset_along_range_m)))
+            eps = float(rng.uniform(-float(self.env_config.reset_max_perp_m), float(self.env_config.reset_max_perp_m)))
+            yaw = float(
+                self._path_theta
+                + rng.uniform(-float(self.env_config.reset_max_yaw_err_rad), float(self.env_config.reset_max_yaw_err_rad))
+            )
             if try_pose(s0, eps, yaw):
                 return
 
         yaw0 = float(self._path_theta)
-        for eps in RESET_FALLBACK_PERP_M:
+        for eps in self.env_config.reset_fallback_perp_m:
             if try_pose(0.0, float(eps), yaw0):
                 return
 
@@ -1020,8 +1115,8 @@ class LineFollowEnv(gym.Env):
         if self.sim2real.motor_dynamics == "accel":
             aL, aR = float(cmd[0]), float(cmd[1])
             dt = 1.0 / CONTROL_FREQUENCY
-            self._omega_left += aL * MAX_WHEEL_ANG_ACCEL * dt
-            self._omega_right += aR * MAX_WHEEL_ANG_ACCEL * dt
+            self._omega_left += aL * float(self.env_config.max_wheel_ang_accel) * dt
+            self._omega_right += aR * float(self.env_config.max_wheel_ang_accel) * dt
             self._omega_left = float(np.clip(self._omega_left, -wmx, wmx))
             self._omega_right = float(np.clip(self._omega_right, -wmx, wmx))
         else:
@@ -1056,7 +1151,9 @@ class LineFollowEnv(gym.Env):
             force=mf,
         )
         omega_front = 0.5 * (self._omega_left + self._omega_right)
-        caster_f = FRONT_CASTER_ROLL_FORCE * (mf / max(MAX_MOTOR_FORCE, 1e-9))
+        caster_f = float(self.env_config.front_caster_roll_force) * (
+            mf / max(float(self.env_config.max_motor_force), 1e-9)
+        )
         p.setJointMotorControl2(
             self._robot,
             self._front_caster_joint,
@@ -1089,9 +1186,9 @@ class LineFollowEnv(gym.Env):
         _r_lo, r_hi = self._ir_scene_reflectance_bounds()
         line_strength = float(np.sum(np.maximum(0.0, r_hi - r)))
         weak_thr = (
-            IR_LINE_STRENGTH_EPS
+            float(self.env_config.ir_line_strength_eps)
             * max(1, self.n_ir_sensors)
-            * float(IR_LINE_LOST_STRENGTH_MULT)
+            * float(self.env_config.ir_line_lost_strength_mult)
         )
         if line_strength < weak_thr:
             self._line_lost_counter += 1
@@ -1099,15 +1196,15 @@ class LineFollowEnv(gym.Env):
             self._line_lost_counter = 0
 
         reward = float(
-            -IR_SENSOR_LATERAL_WEIGHT * abs(lat)
-            + IR_PROGRESS_WEIGHT * forward_speed
-            + FORWARD_ACCEL_REWARD_WEIGHT * forward_accel_bonus
-            - WHEEL_CMD_PENALTY_WEIGHT * float(cmd[0] ** 2 + cmd[1] ** 2)
-            - WHEEL_CMD_JITTER_PENALTY_WEIGHT * cmd_jitter
-            + ALIVE_BONUS
+            -float(self.env_config.ir_sensor_lateral_weight) * abs(lat)
+            + float(self.env_config.ir_progress_weight) * forward_speed
+            + float(self.env_config.forward_accel_reward_weight) * forward_accel_bonus
+            - float(self.env_config.wheel_cmd_penalty_weight) * float(cmd[0] ** 2 + cmd[1] ** 2)
+            - float(self.env_config.wheel_cmd_jitter_penalty_weight) * cmd_jitter
+            + float(self.env_config.alive_bonus)
         )
-        lat_fail = abs(lat) > IR_TERMINATE_LATERAL_NORM
-        line_lost_fail = self._line_lost_counter >= IR_LOST_CONSECUTIVE_STEPS
+        lat_fail = abs(lat) > float(self.env_config.ir_terminate_lateral_norm)
+        line_lost_fail = self._line_lost_counter >= int(self.env_config.ir_lost_consecutive_steps)
         terminated = bool(lat_fail or line_lost_fail)
 
         self._step_count += 1

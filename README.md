@@ -8,6 +8,7 @@ Train and evaluate a PPO policy for a PyBullet line-following robot with IR-styl
 - `evaluate.py`: run a saved policy in the PyBullet GUI
 - `line_follow_env.py`: Gymnasium environment and reward logic
 - `sim2real.example.json`: example sim-to-real config overrides
+- `env_config.json`: environment/task config used by `train.py` and `evaluate.py` by default
 - `models/`: default output directory for saved policies
 
 ## Setup
@@ -41,6 +42,7 @@ Useful training options:
 - `--action-delay N`: add control delay
 - `--ir-model analytic|ray_bundle`: choose sensor model
 - `--sim2real-config sim2real.example.json`: load config overrides
+- `--env-config path/to/env_config.json`: override the default reward/reset/physics/layout config
 
 Example sim-to-real style training run:
 
@@ -74,6 +76,7 @@ Useful evaluation options:
 - `--seed 0`: base seed for rollouts
 - `--max-episode-steps 500`: episode horizon
 - `--sim2real-config sim2real.example.json`: load config overrides
+- `--env-config path/to/env_config.json`: override the default reward/reset/physics/layout config
 
 Example evaluation run matching the sim-to-real training setup:
 
@@ -118,5 +121,8 @@ The most common source of confusing results is a mismatch between training and e
 - `--ir-comparator-level`
 - `--scene-rand`
 - `--sim2real-config`
+- `--env-config`
+
+By default, both `train.py` and `evaluate.py` load [env_config.json](/Users/aadi/Downloads/Reinforcement%20Learning%20-%20AIPI%20590/rl-line-following-bot/env_config.json). Pass `--env-config` only if you want to use a different file.
 
 If you trained with a different environment configuration and evaluate with defaults, the robot may look unstable or terminate early even if training seemed fine.

@@ -18,7 +18,9 @@ import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 
-from line_follow_env import LineFollowEnv, Sim2RealConfig
+from line_follow_env import EnvConfig, LineFollowEnv, Sim2RealConfig
+
+DEFAULT_ENV_CONFIG_PATH = Path(__file__).resolve().parent / "env_config.json"
 
 
 def linear_learning_rate_schedule(lr_start: float, lr_end: float):
@@ -212,6 +214,12 @@ def main() -> None:
         default=None,
         help="Optional JSON file merged into Sim2RealConfig after CLI defaults (motor_dynamics, IR, domain rand, …)",
     )
+    parser.add_argument(
+        "--env-config",
+        type=str,
+        default=str(DEFAULT_ENV_CONFIG_PATH),
+        help="JSON file merged into EnvConfig after CLI defaults (reward, reset, physics, sensor layout, …)",
+    )
     args = parser.parse_args()
 
     if args.reproducible_training:
@@ -232,14 +240,19 @@ def main() -> None:
     )
     if args.sim2real_config:
         sim2real = Sim2RealConfig.merge_json(args.sim2real_config, sim2real)
+    env_config = EnvConfig(
+        max_episode_steps=args.max_episode_steps,
+        n_ir_sensors=args.ir_sensors,
+        line_half_width=0.5 * float(args.line_width_m),
+    )
+    if args.env_config:
+        env_config = EnvConfig.merge_json(args.env_config, env_config)
 
     def make_env() -> LineFollowEnv:
         return LineFollowEnv(
             render_mode="human" if args.gui else None,
-            max_episode_steps=args.max_episode_steps,
             sim2real=sim2real,
-            n_ir_sensors=args.ir_sensors,
-            line_half_width=0.5 * float(args.line_width_m),
+            env_config=env_config,
             show_ir_gui=False,
             verbose_episode=not args.quiet,
         )

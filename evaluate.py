@@ -4,6 +4,7 @@ Load a trained PPO and roll out in the line-following env (PyBullet GUI always o
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from stable_baselines3 import PPO
 
@@ -11,9 +12,12 @@ from line_follow_env import (
     DEFAULT_FIXED_CAM_DISTANCE,
     DEFAULT_FIXED_CAM_PITCH_DEG,
     DEFAULT_FIXED_CAM_YAW_DEG,
+    EnvConfig,
     LineFollowEnv,
     Sim2RealConfig,
 )
+
+DEFAULT_ENV_CONFIG_PATH = Path(__file__).resolve().parent / "env_config.json"
 
 
 def main() -> None:
@@ -97,6 +101,12 @@ def main() -> None:
         default=None,
         help="Optional JSON merged into Sim2RealConfig (match training motor_dynamics / IR / domain rand)",
     )
+    parser.add_argument(
+        "--env-config",
+        type=str,
+        default=str(DEFAULT_ENV_CONFIG_PATH),
+        help="JSON merged into EnvConfig (match training reward, reset, physics, sensor layout, …)",
+    )
     args = parser.parse_args()
 
     render_mode = "human"
@@ -113,6 +123,13 @@ def main() -> None:
     )
     if args.sim2real_config:
         sim2real = Sim2RealConfig.merge_json(args.sim2real_config, sim2real)
+    env_config = EnvConfig(
+        max_episode_steps=args.max_episode_steps,
+        n_ir_sensors=args.ir_sensors,
+        line_half_width=0.5 * float(args.line_width_m),
+    )
+    if args.env_config:
+        env_config = EnvConfig.merge_json(args.env_config, env_config)
 
     fd = DEFAULT_FIXED_CAM_DISTANCE if args.fixed_cam_dist is None else args.fixed_cam_dist
     fy = DEFAULT_FIXED_CAM_YAW_DEG if args.fixed_cam_yaw is None else args.fixed_cam_yaw
@@ -121,10 +138,8 @@ def main() -> None:
     def make_env() -> LineFollowEnv:
         return LineFollowEnv(
             render_mode=render_mode,
-            max_episode_steps=args.max_episode_steps,
             sim2real=sim2real,
-            n_ir_sensors=args.ir_sensors,
-            line_half_width=0.5 * float(args.line_width_m),
+            env_config=env_config,
             gui_camera_mode=args.gui_camera,
             fixed_camera_distance=fd,
             fixed_camera_yaw_deg=fy,
