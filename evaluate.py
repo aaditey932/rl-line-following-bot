@@ -41,6 +41,29 @@ def main() -> None:
         default=0.0,
         help="IR Gaussian noise std (0=off; match training, e.g. 0.025 if trained with noise)",
     )
+    parser.add_argument(
+        "--scene-rand",
+        action="store_true",
+        help="Match training: randomized IR scene appearance and slow sensor/light drift",
+    )
+    parser.add_argument(
+        "--ir-model",
+        choices=("analytic", "ray_bundle"),
+        default="analytic",
+        help="Match training: analytic line-distance IR or PyBullet ray bundle footprint sampling",
+    )
+    parser.add_argument(
+        "--ir-spot-rays",
+        type=int,
+        default=9,
+        help="When --ir-model ray_bundle: rays per sensor footprint",
+    )
+    parser.add_argument(
+        "--ir-spot-radius-m",
+        type=float,
+        default=0.006,
+        help="When --ir-model ray_bundle: sensor footprint radius on the floor",
+    )
     parser.add_argument("--ir-gamma", type=float, default=0.93)
     parser.add_argument("--ir-adc-bits", type=int, default=10)
     parser.add_argument(
@@ -78,6 +101,10 @@ def main() -> None:
 
     render_mode = "human"
     sim2real = Sim2RealConfig(
+        scene_randomization=args.scene_rand,
+        ir_model=args.ir_model,
+        ir_spot_rays=args.ir_spot_rays,
+        ir_spot_radius_m=float(args.ir_spot_radius_m),
         ir_noise_std=float(args.ir_noise),
         ir_photodiode_gamma=args.ir_gamma,
         ir_adc_bits=args.ir_adc_bits,

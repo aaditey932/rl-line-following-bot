@@ -90,6 +90,11 @@ def main() -> None:
         action="store_true",
         help="Sim2Real: randomize mass, friction, gravity, motor force / wheel ω max, rear joint damping",
     )
+    parser.add_argument(
+        "--scene-rand",
+        action="store_true",
+        help="Randomize IR scene appearance: black/white levels, line width/edges, floor texture, and sensor drift",
+    )
     parser.add_argument("--action-delay", type=int, default=0, help="Steps of action delay")
     parser.add_argument(
         "--ir-sensors",
@@ -119,6 +124,24 @@ def main() -> None:
         type=float,
         default=0.93,
         help="Photodiode response: normalized signal raised to this power (1=linear)",
+    )
+    parser.add_argument(
+        "--ir-model",
+        choices=("analytic", "ray_bundle"),
+        default="analytic",
+        help="IR scene model: analytic line-distance blend or PyBullet ray bundle footprint sampling",
+    )
+    parser.add_argument(
+        "--ir-spot-rays",
+        type=int,
+        default=9,
+        help="When --ir-model ray_bundle: rays per sensor footprint",
+    )
+    parser.add_argument(
+        "--ir-spot-radius-m",
+        type=float,
+        default=0.006,
+        help="When --ir-model ray_bundle: sensor footprint radius on the floor",
     )
     parser.add_argument(
         "--ir-adc-bits",
@@ -196,7 +219,11 @@ def main() -> None:
 
     sim2real = Sim2RealConfig(
         domain_randomization=args.domain_rand,
+        scene_randomization=args.scene_rand,
         action_delay_steps=args.action_delay,
+        ir_model=args.ir_model,
+        ir_spot_rays=args.ir_spot_rays,
+        ir_spot_radius_m=float(args.ir_spot_radius_m),
         ir_noise_std=float(args.ir_noise),
         ir_photodiode_gamma=args.ir_gamma,
         ir_adc_bits=args.ir_adc_bits,

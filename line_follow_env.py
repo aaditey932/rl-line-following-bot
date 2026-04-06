@@ -104,9 +104,30 @@ class Sim2RealConfig:
     motor_time_constant_s: float = 0.08
     pwm_discrete_levels: int = 0
     # IR: calibrated black/white reflectance (scene → linear “photocurrent” before front-end)
+    ir_model: Literal["analytic", "ray_bundle"] = "analytic"
+    scene_randomization: bool = False
     ir_reflectance_black: float = 0.12
     ir_reflectance_white: float = 0.92
     ir_edge_scale: float = 0.004
+    ir_ray_height_m: float = 0.02
+    ir_ray_length_m: float = 0.12
+    ir_spot_radius_m: float = 0.006
+    ir_spot_rays: int = 9
+    ir_reflectance_black_range: tuple[float, float] = (0.05, 0.20)
+    ir_reflectance_white_range: tuple[float, float] = (0.85, 0.98)
+    ir_line_half_width_range: tuple[float, float] = (0.020, 0.030)
+    ir_edge_scale_range: tuple[float, float] = (0.002, 0.008)
+    ir_floor_bias_amp_range: tuple[float, float] = (0.00, 0.04)
+    ir_floor_bias_wavelength_range: tuple[float, float] = (0.20, 0.80)
+    ir_floor_fine_noise_range: tuple[float, float] = (0.00, 0.02)
+    ir_line_wear_amp_range: tuple[float, float] = (0.00, 0.03)
+    ir_line_wear_wavelength_range: tuple[float, float] = (0.12, 0.45)
+    ir_edge_waviness_range: tuple[float, float] = (0.0, 0.002)
+    ir_edge_waviness_wavelength_range: tuple[float, float] = (0.12, 0.40)
+    ir_sensor_bias_drift_std: float = 0.0
+    ir_sensor_bias_clip: float = 0.02
+    ir_global_light_drift_std: float = 0.0
+    ir_global_light_clip: float = 0.03
     # IR front-end (mimics reflective sensor module: photodiode + amp + noise + ADC)
     ir_photodiode_gamma: float = 0.93
     ir_noise_std: float = 0.0
@@ -135,6 +156,17 @@ class Sim2RealConfig:
                 "motor_force_scale_range",
                 "wheel_vel_max_scale_range",
                 "wheel_joint_damping_range",
+                "ir_reflectance_black_range",
+                "ir_reflectance_white_range",
+                "ir_line_half_width_range",
+                "ir_edge_scale_range",
+                "ir_floor_bias_amp_range",
+                "ir_floor_bias_wavelength_range",
+                "ir_floor_fine_noise_range",
+                "ir_line_wear_amp_range",
+                "ir_line_wear_wavelength_range",
+                "ir_edge_waviness_range",
+                "ir_edge_waviness_wavelength_range",
             ):
                 if isinstance(v, (list, tuple)) and len(v) == 2:
                     kwargs[k] = (float(v[0]), float(v[1]))
@@ -143,9 +175,12 @@ class Sim2RealConfig:
             elif k == "motor_dynamics":
                 if v in ("accel", "pwm_first_order"):
                     kwargs[k] = v
-            elif k == "domain_randomization" or k == "ir_digital_output":
+            elif k == "ir_model":
+                if v in ("analytic", "ray_bundle"):
+                    kwargs[k] = v
+            elif k in ("domain_randomization", "scene_randomization", "ir_digital_output"):
                 kwargs[k] = bool(v)
-            elif k == "action_delay_steps" or k == "pwm_discrete_levels" or k == "ir_adc_bits":
+            elif k in ("action_delay_steps", "pwm_discrete_levels", "ir_adc_bits", "ir_spot_rays"):
                 kwargs[k] = int(v)
             else:
                 kwargs[k] = float(v) if isinstance(v, (int, float)) else v
@@ -247,6 +282,23 @@ class LineFollowEnv(gym.Env):
         self._motor_force = float(MAX_MOTOR_FORCE)
         self._motor_u_left = 0.0
         self._motor_u_right = 0.0
+        self._episode_ir_black = float(self.sim2real.ir_reflectance_black)
+        self._episode_ir_white = float(self.sim2real.ir_reflectance_white)
+        self._episode_line_half_width = self.line_half_width
+        self._episode_ir_edge_scale = float(self.sim2real.ir_edge_scale)
+        self._floor_bias_amp = 0.0
+        self._floor_bias_wavelength = 1.0
+        self._floor_bias_phase = np.zeros(3, dtype=np.float64)
+        self._floor_fine_amp = 0.0
+        self._floor_fine_phase = np.zeros(2, dtype=np.float64)
+        self._line_wear_amp = 0.0
+        self._line_wear_wavelength = 1.0
+        self._line_wear_phase = np.zeros(2, dtype=np.float64)
+        self._edge_waviness_amp = 0.0
+        self._edge_waviness_wavelength = 1.0
+        self._edge_waviness_phase = np.zeros(2, dtype=np.float64)
+        self._sensor_bias = np.zeros(self.n_ir_sensors, dtype=np.float64)
+        self._global_light_bias = 0.0
 
         if not URDF_PATH.is_file():
             raise FileNotFoundError(f"Missing URDF: {URDF_PATH}")
@@ -312,25 +364,206 @@ class LineFollowEnv(gym.Env):
 
     def _reflectance_from_signed_dist(self, d: np.ndarray) -> np.ndarray:
         """Map signed perpendicular distance (m) to [0,1] reflectance; black strip near d=0."""
-        cfg = self.sim2real
-        w = self.line_half_width
-        sigma = max(cfg.ir_edge_scale, 1e-6)
+        lo, hi = self._ir_scene_reflectance_bounds()
+        w = self._episode_line_half_width
+        sigma = max(self._episode_ir_edge_scale, 1e-6)
         u = np.abs(d)
         t = _sigmoid((w - u) / sigma)
-        r_lo = cfg.ir_reflectance_black
-        r_hi = cfg.ir_reflectance_white
-        return r_hi * (1.0 - t) + r_lo * t
+        return hi * (1.0 - t) + lo * t
 
-    def _compute_ir_reflectance(self, add_noise: bool) -> np.ndarray:
-        """IR reflectance [0,1] per sensor; optional Gaussian sensor noise (simulates real IR)."""
+    def _ir_scene_reflectance_bounds(self) -> tuple[float, float]:
+        lo = float(np.clip(self._episode_ir_black + self._global_light_bias, 0.0, 0.95))
+        hi = float(np.clip(self._episode_ir_white + self._global_light_bias, 0.05, 1.0))
+        if hi <= lo + 1e-3:
+            hi = min(1.0, lo + 1e-3)
+        return lo, hi
+
+    def _path_frame_coordinates(self, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        ux, uy = self._path_tangent()
+        nx, ny = self._path_normal()
+        s = ux * pts[:, 0] + uy * pts[:, 1]
+        d = nx * pts[:, 0] + ny * pts[:, 1] - self._path_offset
+        return s.astype(np.float64), d.astype(np.float64)
+
+    def _floor_bias(self, pts: np.ndarray) -> np.ndarray:
+        if self._floor_bias_amp <= 0.0:
+            return np.zeros(len(pts), dtype=np.float64)
+        wl = max(self._floor_bias_wavelength, 1e-6)
+        k = 2.0 * np.pi / wl
+        x = pts[:, 0]
+        y = pts[:, 1]
+        p0, p1, p2 = self._floor_bias_phase
+        return self._floor_bias_amp * (
+            0.55 * np.sin(k * x + p0)
+            + 0.30 * np.sin(k * y + p1)
+            + 0.15 * np.sin(k * (0.7 * x + 0.3 * y) + p2)
+        )
+
+    def _floor_fine_texture(self, pts: np.ndarray) -> np.ndarray:
+        if self._floor_fine_amp <= 0.0:
+            return np.zeros(len(pts), dtype=np.float64)
+        x = pts[:, 0]
+        y = pts[:, 1]
+        p0, p1 = self._floor_fine_phase
+        return self._floor_fine_amp * np.sin(29.0 * x + p0) * np.sin(23.0 * y + p1)
+
+    def _line_wear(self, s: np.ndarray) -> np.ndarray:
+        if self._line_wear_amp <= 0.0:
+            return np.zeros(len(s), dtype=np.float64)
+        wl = max(self._line_wear_wavelength, 1e-6)
+        k = 2.0 * np.pi / wl
+        p0, p1 = self._line_wear_phase
+        return self._line_wear_amp * (0.7 * np.sin(k * s + p0) + 0.3 * np.sin(0.5 * k * s + p1))
+
+    def _edge_offset(self, s: np.ndarray) -> np.ndarray:
+        if self._edge_waviness_amp <= 0.0:
+            return np.zeros(len(s), dtype=np.float64)
+        wl = max(self._edge_waviness_wavelength, 1e-6)
+        k = 2.0 * np.pi / wl
+        p0, p1 = self._edge_waviness_phase
+        return self._edge_waviness_amp * (
+            0.75 * np.sin(k * s + p0) + 0.25 * np.sin(0.5 * k * s + p1)
+        )
+
+    def _local_line_half_width(self, s: np.ndarray) -> np.ndarray:
+        base = np.full(len(s), self._episode_line_half_width, dtype=np.float64)
+        if self._edge_waviness_amp <= 0.0:
+            return base
+        wl = max(self._edge_waviness_wavelength, 1e-6)
+        k = 2.0 * np.pi / wl
+        p0, _p1 = self._edge_waviness_phase
+        jitter = 0.5 * self._edge_waviness_amp * np.sin(0.8 * k * s + 0.6 * p0)
+        return np.maximum(0.001, base + jitter)
+
+    def _scene_reflectance_at_points(self, pts: np.ndarray) -> np.ndarray:
+        lo_nom, hi_nom = self._ir_scene_reflectance_bounds()
+        s, d = self._path_frame_coordinates(pts)
+        edge_off = self._edge_offset(s)
+        half_w = self._local_line_half_width(s)
+        sigma = max(self._episode_ir_edge_scale, 1e-6)
+        mix = _sigmoid((half_w - np.abs(d - edge_off)) / sigma)
+        floor_bias = self._floor_bias(pts)
+        floor = hi_nom + floor_bias + self._floor_fine_texture(pts)
+        line = lo_nom + self._line_wear(s) + 0.20 * floor_bias
+        floor = np.clip(floor, 0.0, 1.0)
+        line = np.clip(line, 0.0, 1.0)
+        line = np.minimum(line, floor - 1e-3)
+        return floor * (1.0 - mix) + line * mix
+
+    def _sample_ir_scene_randomization(self) -> None:
+        cfg = self.sim2real
+        r = self.np_random
+        if not cfg.scene_randomization:
+            self._episode_ir_black = float(cfg.ir_reflectance_black)
+            self._episode_ir_white = float(cfg.ir_reflectance_white)
+            self._episode_line_half_width = float(self.line_half_width)
+            self._episode_ir_edge_scale = float(cfg.ir_edge_scale)
+            self._floor_bias_amp = 0.0
+            self._floor_bias_wavelength = 1.0
+            self._floor_bias_phase = np.zeros(3, dtype=np.float64)
+            self._floor_fine_amp = 0.0
+            self._floor_fine_phase = np.zeros(2, dtype=np.float64)
+            self._line_wear_amp = 0.0
+            self._line_wear_wavelength = 1.0
+            self._line_wear_phase = np.zeros(2, dtype=np.float64)
+            self._edge_waviness_amp = 0.0
+            self._edge_waviness_wavelength = 1.0
+            self._edge_waviness_phase = np.zeros(2, dtype=np.float64)
+            self._sensor_bias = np.zeros(self.n_ir_sensors, dtype=np.float64)
+            self._global_light_bias = 0.0
+            return
+
+        self._episode_ir_black = float(r.uniform(*cfg.ir_reflectance_black_range))
+        self._episode_ir_white = float(r.uniform(*cfg.ir_reflectance_white_range))
+        self._episode_line_half_width = float(r.uniform(*cfg.ir_line_half_width_range))
+        self._episode_ir_edge_scale = float(r.uniform(*cfg.ir_edge_scale_range))
+        self._floor_bias_amp = float(r.uniform(*cfg.ir_floor_bias_amp_range))
+        self._floor_bias_wavelength = float(r.uniform(*cfg.ir_floor_bias_wavelength_range))
+        self._floor_bias_phase = r.uniform(0.0, 2.0 * np.pi, size=3).astype(np.float64)
+        self._floor_fine_amp = float(r.uniform(*cfg.ir_floor_fine_noise_range))
+        self._floor_fine_phase = r.uniform(0.0, 2.0 * np.pi, size=2).astype(np.float64)
+        self._line_wear_amp = float(r.uniform(*cfg.ir_line_wear_amp_range))
+        self._line_wear_wavelength = float(r.uniform(*cfg.ir_line_wear_wavelength_range))
+        self._line_wear_phase = r.uniform(0.0, 2.0 * np.pi, size=2).astype(np.float64)
+        self._edge_waviness_amp = float(r.uniform(*cfg.ir_edge_waviness_range))
+        self._edge_waviness_wavelength = float(r.uniform(*cfg.ir_edge_waviness_wavelength_range))
+        self._edge_waviness_phase = r.uniform(0.0, 2.0 * np.pi, size=2).astype(np.float64)
+        self._sensor_bias = np.zeros(self.n_ir_sensors, dtype=np.float64)
+        self._global_light_bias = 0.0
+
+    def _sensor_patch_offsets_body(self) -> np.ndarray:
+        """Small footprint offsets in the sensor plane for ray-bundle IR sensing."""
+        cfg = self.sim2real
+        n = max(1, int(cfg.ir_spot_rays))
+        radius = max(0.0, float(cfg.ir_spot_radius_m))
+        if n <= 1 or radius <= 0.0:
+            return np.zeros((1, 2), dtype=np.float64)
+
+        side = max(2, int(np.ceil(np.sqrt(n))))
+        xs = np.linspace(-radius, radius, side, dtype=np.float64)
+        ys = np.linspace(-radius, radius, side, dtype=np.float64)
+        pts: list[tuple[float, float]] = [(0.0, 0.0)]
+        for y in ys:
+            for x in xs:
+                if x == 0.0 and y == 0.0:
+                    continue
+                if x * x + y * y <= radius * radius:
+                    pts.append((float(x), float(y)))
+        pts = pts[:n]
+        if not pts:
+            pts = [(0.0, 0.0)]
+        return np.asarray(pts, dtype=np.float64)
+
+    def _compute_ir_reflectance_ray_bundle(self) -> np.ndarray:
+        """Approximate each IR sensor as a downward footprint sampled by short PyBullet rays."""
         assert self._robot is not None
         pos, orn = p.getBasePositionAndOrientation(self._robot)
         r_mat = self._rotation_matrix_body_to_world(orn)
         p0 = np.array(pos, dtype=np.float64)
-        nx, ny = self._path_normal()
-        pts = (self._ir_sensor_body @ r_mat.T) + p0
-        d = nx * pts[:, 0] + ny * pts[:, 1] - self._path_offset
-        raw = self._reflectance_from_signed_dist(d.astype(np.float64))
+        body_x = r_mat[:, 0]
+        body_y = r_mat[:, 1]
+        body_z = r_mat[:, 2]
+        sensor_pts = (self._ir_sensor_body @ r_mat.T) + p0
+        patch = self._sensor_patch_offsets_body()
+        ray_h = max(0.001, float(self.sim2real.ir_ray_height_m))
+        ray_len = max(ray_h + 0.001, float(self.sim2real.ir_ray_length_m))
+
+        ray_from: list[list[float]] = []
+        ray_to: list[list[float]] = []
+        for sensor_pt in sensor_pts:
+            for dx, dy in patch:
+                origin = sensor_pt + body_x * dx + body_y * dy + body_z * ray_h
+                target = origin - body_z * ray_len
+                ray_from.append(origin.tolist())
+                ray_to.append(target.tolist())
+
+        hits = p.rayTestBatch(ray_from, ray_to)
+        patch_size = len(patch)
+        reflectance = np.full(len(sensor_pts), self._ir_scene_reflectance_bounds()[1], dtype=np.float64)
+        for i in range(len(sensor_pts)):
+            sensor_hits = hits[i * patch_size : (i + 1) * patch_size]
+            hit_pts: list[list[float]] = []
+            for body_id, _link_idx, hit_frac, hit_pos, _hit_norm in sensor_hits:
+                if hit_frac >= 1.0:
+                    continue
+                if body_id in (self._line_body_id, self._plane):
+                    hit_pts.append(hit_pos)
+            if hit_pts:
+                vals = self._scene_reflectance_at_points(np.asarray(hit_pts, dtype=np.float64))
+                reflectance[i] = float(np.mean(vals))
+        return reflectance
+
+    def _compute_ir_reflectance(self, add_noise: bool) -> np.ndarray:
+        """IR reflectance [0,1] per sensor; optional Gaussian sensor noise (simulates real IR)."""
+        assert self._robot is not None
+        if self.sim2real.ir_model == "ray_bundle":
+            raw = self._compute_ir_reflectance_ray_bundle()
+        else:
+            pos, orn = p.getBasePositionAndOrientation(self._robot)
+            r_mat = self._rotation_matrix_body_to_world(orn)
+            p0 = np.array(pos, dtype=np.float64)
+            pts = (self._ir_sensor_body @ r_mat.T) + p0
+            raw = self._scene_reflectance_at_points(pts.astype(np.float64))
         raw = self._apply_ir_sensor_frontend(raw, add_noise=add_noise)
         return raw.astype(np.float64)
 
@@ -348,11 +581,28 @@ class LineFollowEnv(gym.Env):
     def _apply_ir_sensor_frontend(self, raw: np.ndarray, *, add_noise: bool) -> np.ndarray:
         """Scene linear reflectance → photodiode (gamma) → electronics noise → ADC → optional comparator."""
         cfg = self.sim2real
-        lo, hi = cfg.ir_reflectance_black, cfg.ir_reflectance_white
+        lo, hi = self._ir_scene_reflectance_bounds()
         u = (np.clip(raw, lo, hi) - lo) / max(hi - lo, 1e-9)
         g = max(float(cfg.ir_photodiode_gamma), 1e-6)
         u = np.power(u, g)
         out = lo + u * (hi - lo)
+        if add_noise:
+            if cfg.ir_global_light_drift_std > 0.0:
+                self._global_light_bias = float(
+                    np.clip(
+                        self._global_light_bias + self.np_random.normal(0.0, cfg.ir_global_light_drift_std),
+                        -cfg.ir_global_light_clip,
+                        cfg.ir_global_light_clip,
+                    )
+                )
+            if cfg.ir_sensor_bias_drift_std > 0.0:
+                self._sensor_bias = np.clip(
+                    self._sensor_bias
+                    + self.np_random.normal(0.0, cfg.ir_sensor_bias_drift_std, size=out.shape).astype(np.float64),
+                    -cfg.ir_sensor_bias_clip,
+                    cfg.ir_sensor_bias_clip,
+                )
+            out = out + self._global_light_bias + self._sensor_bias
         if add_noise and cfg.ir_noise_std > 0.0:
             out = out + self.np_random.normal(0.0, cfg.ir_noise_std, size=out.shape).astype(np.float64)
         out = np.clip(out, 0.0, 1.0)
@@ -368,8 +618,7 @@ class LineFollowEnv(gym.Env):
         Single sensor: [0,1] off-track score (0 = line under sensor, 1 = white / lost)."""
         r = np.asarray(r, dtype=np.float64).ravel()
         n = len(r)
-        r_hi = self.sim2real.ir_reflectance_white
-        r_lo = self.sim2real.ir_reflectance_black
+        r_lo, r_hi = self._ir_scene_reflectance_bounds()
         if n == 1:
             denom = max(r_hi - r_lo, 1e-6)
             strength = float(np.clip((r_hi - r[0]) / denom, 0.0, 1.0))
@@ -429,7 +678,7 @@ class LineFollowEnv(gym.Env):
         z = 0.001
         quat = p.getQuaternionFromEuler([0.0, 0.0, self._path_theta])
         hl = STRIP_HALF_LENGTH
-        hw = self.line_half_width
+        hw = self._episode_line_half_width
         hz = 0.0015
         # Use a real collision shape (not -1): visual-only multibodies can fail on second
         # createMultiBody after resetSimulation() on some GUI/Metal builds; keep behavior
@@ -607,7 +856,7 @@ class LineFollowEnv(gym.Env):
 
     def _line_strength_from_reflectance(self, r: np.ndarray) -> float:
         """Sum of (white - reading); same notion as in step() for 'line visible'."""
-        r_hi = self.sim2real.ir_reflectance_white
+        _r_lo, r_hi = self._ir_scene_reflectance_bounds()
         return float(np.sum(np.maximum(0.0, r_hi - np.asarray(r, dtype=np.float64))))
 
     def _place_robot_on_path(self) -> None:
@@ -676,6 +925,7 @@ class LineFollowEnv(gym.Env):
         self._action_history = []
         self._load_world()
         self._sample_path()
+        self._sample_ir_scene_randomization()
         self._spawn_line_strip()
 
         self._place_robot_on_path()
@@ -812,7 +1062,7 @@ class LineFollowEnv(gym.Env):
 
         r = self._compute_ir_reflectance(add_noise=True)
         lat = self._lateral_norm_from_ir(r)
-        r_hi = self.sim2real.ir_reflectance_white
+        _r_lo, r_hi = self._ir_scene_reflectance_bounds()
         line_strength = float(np.sum(np.maximum(0.0, r_hi - r)))
         weak_thr = (
             IR_LINE_STRENGTH_EPS
@@ -884,4 +1134,3 @@ class LineFollowEnv(gym.Env):
         self._robot = None
         self._plane = None
         self._line_body_id = None
-
