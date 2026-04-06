@@ -208,8 +208,14 @@ class EnvConfig:
     ir_sensor_lateral_weight: float = IR_SENSOR_LATERAL_WEIGHT
     ir_progress_weight: float = IR_PROGRESS_WEIGHT
     forward_accel_reward_weight: float = FORWARD_ACCEL_REWARD_WEIGHT
+    line_recovery_reward_weight: float = 0.4
     wheel_cmd_penalty_weight: float = WHEEL_CMD_PENALTY_WEIGHT
     wheel_cmd_jitter_penalty_weight: float = WHEEL_CMD_JITTER_PENALTY_WEIGHT
+    line_visibility_target_strength: float = 0.16
+    bad_tracking_threshold: float = 0.8
+    bad_tracking_penalty_weight: float = 0.2
+    line_lost_terminal_penalty: float = 2.0
+    lateral_terminal_penalty: float = 1.0
     ir_terminate_lateral_norm: float = IR_TERMINATE_LATERAL_NORM
     ir_lost_consecutive_steps: int = IR_LOST_CONSECUTIVE_STEPS
     ir_line_strength_eps: float = IR_LINE_STRENGTH_EPS
@@ -371,6 +377,7 @@ class LineFollowEnv(gym.Env):
         self._episode_idx = 0
         self._episode_return = 0.0
         self._prev_forward_speed = 0.0
+        self._prev_line_strength = 0.0
         self._wheel_vel_max = float(WHEEL_VEL_MAX)
         self._motor_force = float(MAX_MOTOR_FORCE)
         self._motor_u_left = 0.0
@@ -1048,6 +1055,7 @@ class LineFollowEnv(gym.Env):
         self._line_lost_counter = 0
         self._episode_return = 0.0
         self._prev_forward_speed = 0.0
+        self._prev_line_strength = self._line_strength_from_reflectance(self._compute_ir_reflectance(add_noise=False))
         self._episode_idx += 1
         self._draw_line_debug()
         self._update_debug_visualizer_camera()
@@ -1195,17 +1203,49 @@ class LineFollowEnv(gym.Env):
         else:
             self._line_lost_counter = 0
 
-        reward = float(
-            -float(self.env_config.ir_sensor_lateral_weight) * abs(lat)
-            + float(self.env_config.ir_progress_weight) * forward_speed
-            + float(self.env_config.forward_accel_reward_weight) * forward_accel_bonus
-            - float(self.env_config.wheel_cmd_penalty_weight) * float(cmd[0] ** 2 + cmd[1] ** 2)
-            - float(self.env_config.wheel_cmd_jitter_penalty_weight) * cmd_jitter
-            + float(self.env_config.alive_bonus)
-        )
         lat_fail = abs(lat) > float(self.env_config.ir_terminate_lateral_norm)
         line_lost_fail = self._line_lost_counter >= int(self.env_config.ir_lost_consecutive_steps)
         terminated = bool(lat_fail or line_lost_fail)
+        visibility_target = max(float(self.env_config.line_visibility_target_strength), 1e-6)
+        visibility_gate = float(np.clip(line_strength / visibility_target, 0.0, 1.0))
+        alignment_gate = float(max(0.0, 1.0 - abs(lat)))
+        line_recovery = max(0.0, line_strength - float(self._prev_line_strength))
+        self._prev_line_strength = line_strength
+
+        reward_tracking = -float(self.env_config.ir_sensor_lateral_weight) * float(lat ** 2)
+        reward_progress = float(self.env_config.ir_progress_weight) * forward_speed * visibility_gate * alignment_gate
+        reward_accel = (
+            float(self.env_config.forward_accel_reward_weight)
+            * forward_accel_bonus
+            * visibility_gate
+            * alignment_gate
+        )
+        reward_recovery = float(self.env_config.line_recovery_reward_weight) * line_recovery
+        reward_alive = float(self.env_config.alive_bonus)
+        penalty_cmd = float(self.env_config.wheel_cmd_penalty_weight) * float(cmd[0] ** 2 + cmd[1] ** 2)
+        penalty_jitter = float(self.env_config.wheel_cmd_jitter_penalty_weight) * cmd_jitter
+        penalty_bad_tracking = (
+            float(self.env_config.bad_tracking_penalty_weight)
+            if abs(lat) > float(self.env_config.bad_tracking_threshold)
+            else 0.0
+        )
+        penalty_terminal = 0.0
+        if line_lost_fail:
+            penalty_terminal += float(self.env_config.line_lost_terminal_penalty)
+        if lat_fail:
+            penalty_terminal += float(self.env_config.lateral_terminal_penalty)
+
+        reward = float(
+            reward_tracking
+            + reward_progress
+            + reward_accel
+            + reward_recovery
+            + reward_alive
+            - penalty_cmd
+            - penalty_jitter
+            - penalty_bad_tracking
+            - penalty_terminal
+        )
 
         self._step_count += 1
         truncated = self._step_count >= self.max_episode_steps
@@ -1234,6 +1274,18 @@ class LineFollowEnv(gym.Env):
             "forward_accel": float(forward_accel),
             "cmd_jitter": cmd_jitter,
             "line_strength": float(line_strength),
+            "line_recovery": float(line_recovery),
+            "visibility_gate": visibility_gate,
+            "alignment_gate": alignment_gate,
+            "reward_tracking": float(reward_tracking),
+            "reward_progress": float(reward_progress),
+            "reward_accel": float(reward_accel),
+            "reward_recovery": float(reward_recovery),
+            "reward_alive": float(reward_alive),
+            "penalty_cmd": float(penalty_cmd),
+            "penalty_jitter": float(penalty_jitter),
+            "penalty_bad_tracking": float(penalty_bad_tracking),
+            "penalty_terminal": float(penalty_terminal),
             "line_lost_count": int(self._line_lost_counter),
             "termination_reason": reason,
         }

@@ -4,7 +4,7 @@ Train PPO on LineFollowEnv (PyBullet). Headless (DIRECT) by default; use --gui t
 Exploration decays over training by default: entropy coefficient (--entropy-start → --entropy-end),
 optionally with --entropy-schedule exp. Learning rate can decay linearly (--learning-rate → --learning-rate-end).
 
-Sim2Real: optional JSON overrides via --sim2real-config (see Sim2RealConfig / sim2real.example.json).
+Sim2Real: optional JSON overrides via --sim2real-config (see Sim2RealConfig / sim2real_config.json).
 """
 from __future__ import annotations
 
@@ -20,7 +20,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from line_follow_env import EnvConfig, LineFollowEnv, Sim2RealConfig
 
-DEFAULT_ENV_CONFIG_PATH = Path(__file__).resolve().parent / "env_config.json"
+DEFAULT_SIM2REAL_CONFIG_PATH = Path(__file__).resolve().parent / "sim2real_config.json"
+DEFAULT_ENV_CONFIG_PATH = Path(__file__).resolve().parent / "environment_config.json"
 
 
 def linear_learning_rate_schedule(lr_start: float, lr_end: float):
@@ -78,7 +79,7 @@ class ExplorationDecayCallback(BaseCallback):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PPO line-following in PyBullet (IR observations)")
-    parser.add_argument("--timesteps", type=int, default=100_0000, help="PPO learn steps")
+    parser.add_argument("--timesteps", type=int, default=100_000, help="PPO learn steps")
     parser.add_argument(
         "--save",
         type=str,
@@ -211,8 +212,8 @@ def main() -> None:
     parser.add_argument(
         "--sim2real-config",
         type=str,
-        default=None,
-        help="Optional JSON file merged into Sim2RealConfig after CLI defaults (motor_dynamics, IR, domain rand, …)",
+        default=str(DEFAULT_SIM2REAL_CONFIG_PATH),
+        help="JSON file merged into Sim2RealConfig after CLI defaults (motor_dynamics, IR, domain rand, …)",
     )
     parser.add_argument(
         "--env-config",

@@ -17,7 +17,8 @@ from line_follow_env import (
     Sim2RealConfig,
 )
 
-DEFAULT_ENV_CONFIG_PATH = Path(__file__).resolve().parent / "env_config.json"
+DEFAULT_SIM2REAL_CONFIG_PATH = Path(__file__).resolve().parent / "sim2real_config.json"
+DEFAULT_ENV_CONFIG_PATH = Path(__file__).resolve().parent / "environment_config.json"
 
 
 def main() -> None:
@@ -98,8 +99,8 @@ def main() -> None:
     parser.add_argument(
         "--sim2real-config",
         type=str,
-        default=None,
-        help="Optional JSON merged into Sim2RealConfig (match training motor_dynamics / IR / domain rand)",
+        default=str(DEFAULT_SIM2REAL_CONFIG_PATH),
+        help="JSON merged into Sim2RealConfig (match training motor_dynamics / IR / domain rand)",
     )
     parser.add_argument(
         "--env-config",

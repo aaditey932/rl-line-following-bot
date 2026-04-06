@@ -7,8 +7,8 @@ Train and evaluate a PPO policy for a PyBullet line-following robot with IR-styl
 - `train.py`: train a PPO policy
 - `evaluate.py`: run a saved policy in the PyBullet GUI
 - `line_follow_env.py`: Gymnasium environment and reward logic
-- `sim2real.example.json`: example sim-to-real config overrides
-- `env_config.json`: environment/task config used by `train.py` and `evaluate.py` by default
+- `sim2real_config.json`: sim-to-real config used by `train.py` and `evaluate.py` by default
+- `environment_config.json`: environment/task config used by `train.py` and `evaluate.py` by default
 - `models/`: default output directory for saved policies
 
 ## Setup
@@ -41,8 +41,8 @@ Useful training options:
 - `--domain-rand`: randomize physical properties
 - `--action-delay N`: add control delay
 - `--ir-model analytic|ray_bundle`: choose sensor model
-- `--sim2real-config sim2real.example.json`: load config overrides
-- `--env-config path/to/env_config.json`: override the default reward/reset/physics/layout config
+- `--sim2real-config path/to/sim2real_config.json`: override the default sim-to-real config
+- `--env-config path/to/environment_config.json`: override the default reward/reset/physics/layout config
 
 Example sim-to-real style training run:
 
@@ -53,8 +53,7 @@ python3 train.py \
   --scene-rand \
   --domain-rand \
   --action-delay 1 \
-  --ir-model ray_bundle \
-  --sim2real-config sim2real.example.json
+  --ir-model ray_bundle
 ```
 
 Saved models are written as `.zip` files. For example, `--save models/ppo_line_follow` produces `models/ppo_line_follow.zip`.
@@ -75,8 +74,8 @@ Useful evaluation options:
 - `--no-ir-gui`: disable the matplotlib IR window
 - `--seed 0`: base seed for rollouts
 - `--max-episode-steps 500`: episode horizon
-- `--sim2real-config sim2real.example.json`: load config overrides
-- `--env-config path/to/env_config.json`: override the default reward/reset/physics/layout config
+- `--sim2real-config path/to/sim2real_config.json`: override the default sim-to-real config
+- `--env-config path/to/environment_config.json`: override the default reward/reset/physics/layout config
 
 Example evaluation run matching the sim-to-real training setup:
 
@@ -85,19 +84,17 @@ python3 evaluate.py \
   --model models/ppo_line_follow_sim2real \
   --deterministic \
   --scene-rand \
-  --ir-model ray_bundle \
-  --sim2real-config sim2real.example.json
+  --ir-model ray_bundle
 ```
 
-Note: `evaluate.py` does not currently expose `--action-delay` or `--domain-rand` directly on the CLI. If those were used during training, pass the same settings through `--sim2real-config`.
+Note: `evaluate.py` does not currently expose `--action-delay` or `--domain-rand` directly on the CLI. If those were used during training and you want different values from the default file, pass them through `--sim2real-config`.
 
 Example:
 
 ```bash
 python3 evaluate.py \
   --model models/ppo_line_follow_sim2real \
-  --deterministic \
-  --sim2real-config sim2real.example.json
+  --deterministic
 ```
 
 At the end of each episode, evaluation prints the return and termination diagnostics such as `reason`, `lat`, `line_strength`, and `line_lost_count`.
@@ -106,7 +103,7 @@ At the end of each episode, evaluation prints the return and termination diagnos
 
 1. Train a model with `train.py`.
 2. Evaluate the saved `.zip` model with `evaluate.py`.
-3. If behavior is poor, adjust reward, motor dynamics, or sim-to-real settings in `line_follow_env.py` or `sim2real.example.json`.
+3. If behavior is poor, adjust reward, motor dynamics, or sim-to-real settings in `line_follow_env.py` or `sim2real_config.json`.
 4. Retrain after any environment or reward change.
 
 ## Keep Train And Eval Aligned
@@ -123,6 +120,6 @@ The most common source of confusing results is a mismatch between training and e
 - `--sim2real-config`
 - `--env-config`
 
-By default, both `train.py` and `evaluate.py` load [env_config.json](/Users/aadi/Downloads/Reinforcement%20Learning%20-%20AIPI%20590/rl-line-following-bot/env_config.json). Pass `--env-config` only if you want to use a different file.
+By default, both `train.py` and `evaluate.py` load [sim2real_config.json](/Users/aadi/Downloads/Reinforcement%20Learning%20-%20AIPI%20590/rl-line-following-bot/sim2real_config.json) and [environment_config.json](/Users/aadi/Downloads/Reinforcement%20Learning%20-%20AIPI%20590/rl-line-following-bot/environment_config.json). Pass `--sim2real-config` or `--env-config` only if you want to use different files.
 
 If you trained with a different environment configuration and evaluate with defaults, the robot may look unstable or terminate early even if training seemed fine.
