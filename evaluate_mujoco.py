@@ -119,6 +119,7 @@ def main() -> None:
     parser.add_argument("--save-video-root", type=str, default=None)
     parser.add_argument("--save-metadata-root", type=str, default=None)
     parser.add_argument("--video-fps", type=float, default=50.0)
+    parser.add_argument("--save-trajectory", type=str, default=None, help="Path to save JSON trajectory for Three.js viewer")
 
     parser.add_argument("--ir-sensors", type=int, default=None)
     parser.add_argument("--line-width-m", type=float, default=None)
@@ -180,15 +181,27 @@ def main() -> None:
     model = PPO.load(model_path, env=env)
 
     returns = []
+    best_traj: dict[str, Any] | None = None  # track best episode for --save-trajectory
+    best_return = float("-inf")
+
     for ep in range(args.episodes):
         obs, reset_info = env.reset(seed=args.seed + ep)
         total_r = 0.0
         end_info: dict[str, Any] = {}
         writer: cv2.VideoWriter | None = None
+        traj_frames: list[dict[str, Any]] = [] if args.save_trajectory else []
         while True:
             action, _ = model.predict(obs, deterministic=args.deterministic)
             obs, reward, term, trunc, info = env.step(action)
             total_r += float(reward)
+            if args.save_trajectory:
+                rx, ry, ryaw = env._robot_pose_world()
+                traj_frames.append({
+                    "x": rx, "y": ry, "yaw": ryaw,
+                    "ir": obs[:env.ec.n_ir_sensors].tolist(),
+                    "action": action.tolist() if hasattr(action, "tolist") else list(action),
+                    "reward": float(reward),
+                })
             if video_dir is not None:
                 frame = env.last_rendered_frame()
                 if frame is None:
@@ -202,6 +215,21 @@ def main() -> None:
                 break
         if writer is not None:
             writer.release()
+
+        if args.save_trajectory and total_r > best_return:
+            best_return = total_r
+            best_traj = {
+                "episode": ep + 1,
+                "return": total_r,
+                "track_points": env._track.points.tolist(),
+                "track_type": env._track.track_type,
+                "line_half_width": env.ec.line_half_width,
+                "n_ir_sensors": env.ec.n_ir_sensors,
+                "ir_sensor_x": float(env.ec.ir_sensor_x) if hasattr(env.ec, "ir_sensor_x") else 0.08,
+                "ir_sensor_y_span": float(env.ec.ir_sensor_y_span) if hasattr(env.ec, "ir_sensor_y_span") else 0.08,
+                "control_hz": 50,
+                "frames": traj_frames,
+            }
 
         returns.append(total_r)
         reason = end_info.get("termination_reason", "?")
@@ -233,6 +261,11 @@ def main() -> None:
 
     env.close()
     print(f"\nMean return: {np.mean(returns):.3f} +/- {np.std(returns):.3f}")
+
+    if args.save_trajectory and best_traj is not None:
+        traj_path = Path(args.save_trajectory)
+        traj_path.write_text(json.dumps(best_traj), encoding="utf-8")
+        print(f"Best trajectory (ep {best_traj['episode']}, return={best_traj['return']:.1f}) saved to {traj_path}")
 
 
 if __name__ == "__main__":
