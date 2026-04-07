@@ -1,0 +1,7 @@
+project_copy/
+models/
+__pycache__/
+.venv/
+episode_videos/
+*.pyc
+.venv/lib/python3.10/site-packages/torch/lib/libtorch_cpu.dylib

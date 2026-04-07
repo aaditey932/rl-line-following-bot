@@ -1,0 +1,176 @@
+<mujoco model="diff_drive">
+  <!--
+    Differential-drive line-following robot — Hack Lab kit dimensions.
+      Chassis : ~20 x 15 x 4 cm acrylic/plastic  (mass ~0.35 kg incl. electronics)
+      Wheels  : TT geared DC motor wheels, radius 0.033 m, width 0.026 m
+      Baseline: ~0.14 m (left-right wheel centre distance)
+      Caster  : metal ball caster, front-centre  (passive)
+    Drive: velocity-controlled rear wheels (actuator_velocity).
+    Caster: free-spinning ball joint (no actuator).
+    The floor plane and line strip are added programmatically via MjModel.
+  -->
+
+  <compiler angle="radian" autolimits="true"/>
+
+  <!-- timestep 0.004 s = 250 Hz physics; 5 substeps per 50 Hz control tick -->
+  <option timestep="0.004" gravity="0 0 -9.81" integrator="implicitfast">
+  </option>
+
+  <default>
+    <joint damping="0.01" armature="0.001"/>
+    <!-- Softer contacts prevent bounce/instability on the kit's light chassis -->
+    <geom condim="3" friction="0.8 0.005 0.005"
+          solimp="0.95 0.99 0.001 0.5 2"
+          solref="0.04 1"/>
+    <motor ctrllimited="true" ctrlrange="-18 18"/>
+  </default>
+
+  <worldbody>
+    <!-- Ground plane: white, used for IR sensing -->
+    <geom name="floor" type="plane" size="4 4 0.1" pos="0 0 0"
+          rgba="0.96 0.96 0.96 1" condim="3" friction="0.8 0.005 0.005"
+          solimp="0.95 0.99 0.001 0.5 2" solref="0.04 1"/>
+
+    <!-- Line strip box (black): replaced each episode programmatically.
+         Half-extents: [3.0, line_half_width, 0.0015]. Initially invisible. -->
+    <geom name="line_strip" type="box" size="3.0 0.025 0.0015"
+          pos="0 0 0.0015" rgba="0.03 0.03 0.03 1"
+          contype="0" conaffinity="0"/>
+    <!-- Segmented visual track geoms for sampled curves/arcs/turn sequences. -->
+    <geom name="line_seg_000" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_001" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_002" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_003" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_004" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_005" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_006" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_007" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_008" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_009" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_010" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_011" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_012" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_013" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_014" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_015" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_016" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_017" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_018" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_019" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_020" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_021" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_022" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_023" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_024" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_025" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_026" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_027" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_028" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_029" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_030" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_031" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_032" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_033" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_034" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_035" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_036" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_037" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_038" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_039" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_040" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_041" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_042" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_043" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_044" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_045" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_046" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_047" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_048" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_049" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_050" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_051" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_052" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_053" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_054" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_055" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_056" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_057" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_058" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_059" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_060" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_061" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_062" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+    <geom name="line_seg_063" type="box" size="0.001 0.001 0.001" pos="0 0 -5" rgba="0.03 0.03 0.03 0" contype="0" conaffinity="0"/>
+
+    <!-- Robot body — Hack Lab kit chassis dimensions -->
+    <!-- Chassis ≈ 20x15x4 cm; wheels at rear, ball caster at front -->
+    <!-- Spawn height: wheel radius (0.033) + small clearance = 0.038 m -->
+    <body name="base_link" pos="0 0 0.05">
+      <freejoint name="root"/>
+      <!-- mass 0.35 kg: chassis + Pi + L298N + battery bank + 9V -->
+      <inertial pos="0 0 0" mass="0.35"
+                fullinertia="0.0025 0.0030 0.0045 0 0 0"/>
+      <geom name="chassis" type="box" size="0.10 0.075 0.02"
+            rgba="0.85 0.85 0.9 0.8" mass="0"/>
+
+      <!-- IR sensor sites: 5 sensors under the front of chassis.
+           Kit sensors typically 8–10 cm forward of wheel axle.
+           Spaced 2 cm apart → 8 cm total span.
+           z = -0.02 m (just below chassis floor, ~10 mm above ground). -->
+      <site name="ir0" pos="0.08 -0.04 -0.018" size="0.004" rgba="1 0.4 0 1"/>
+      <site name="ir1" pos="0.08 -0.02 -0.018" size="0.004" rgba="1 0.4 0 1"/>
+      <site name="ir2" pos="0.08  0.00 -0.018" size="0.004" rgba="1 0.4 0 1"/>
+      <site name="ir3" pos="0.08  0.02 -0.018" size="0.004" rgba="1 0.4 0 1"/>
+      <site name="ir4" pos="0.08  0.04 -0.018" size="0.004" rgba="1 0.4 0 1"/>
+
+      <!-- Left rear wheel: TT motor wheel radius=0.033m, width=0.026m -->
+      <!-- Wheel axle offset: -0.07 m rear, ±0.07 m lateral -->
+      <body name="left_rear_wheel" pos="-0.07 0.07 -0.017">
+        <joint name="left_wheel_joint" type="hinge" axis="0 1 0" damping="0.03" armature="0.001"/>
+        <inertial pos="0 0 0" mass="0.05"
+                  fullinertia="0.000027 0.000054 0.000027 0 0 0"/>
+        <geom name="left_wheel" type="cylinder" size="0.033 0.013"
+              euler="1.5707963 0 0" rgba="0.9 0.75 0.1 1" mass="0"
+              friction="1.2 0.01 0.01"/>
+      </body>
+
+      <!-- Right rear wheel -->
+      <body name="right_rear_wheel" pos="-0.07 -0.07 -0.017">
+        <joint name="right_wheel_joint" type="hinge" axis="0 1 0" damping="0.03" armature="0.001"/>
+        <inertial pos="0 0 0" mass="0.05"
+                  fullinertia="0.000027 0.000054 0.000027 0 0 0"/>
+        <geom name="right_wheel" type="cylinder" size="0.033 0.013"
+              euler="1.5707963 0 0" rgba="0.9 0.75 0.1 1" mass="0"
+              friction="1.2 0.01 0.01"/>
+      </body>
+
+      <!-- Front ball caster — metal ball, radius ~15 mm -->
+      <body name="front_caster" pos="0.08 0 -0.02">
+        <joint name="caster_joint" type="ball" damping="0.002" armature="0"/>
+        <inertial pos="0 0 0" mass="0.02"
+                  fullinertia="0.000003 0.000003 0.000003 0 0 0"/>
+        <geom name="caster_geom" type="sphere" size="0.015"
+              rgba="0.6 0.6 0.6 1" mass="0"
+              friction="0.01 0.001 0.001"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Velocity actuators.  TT motors at 9V ≈ 200 RPM ≈ 21 rad/s at wheel. -->
+    <!-- ctrlrange ±18 rad/s is a conservative usable range. -->
+    <velocity name="left_wheel_vel"  joint="left_wheel_joint"
+              kv="6" ctrlrange="-18 18"/>
+    <velocity name="right_wheel_vel" joint="right_wheel_joint"
+              kv="6" ctrlrange="-18 18"/>
+  </actuator>
+
+  <sensor>
+    <!-- Joint velocity sensors for wheel odometry (encoder analogue) -->
+    <jointvel name="left_wheel_vel_sensor"  joint="left_wheel_joint"/>
+    <jointvel name="right_wheel_vel_sensor" joint="right_wheel_joint"/>
+    <!-- Body velocity in world frame (for forward-speed reward) -->
+    <framelinvel name="base_linvel" objtype="body" objname="base_link"/>
+    <framequat    name="base_quat"  objtype="body" objname="base_link"/>
+  </sensor>
+</mujoco>

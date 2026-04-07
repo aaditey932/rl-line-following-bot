@@ -1,0 +1,20 @@
+# Core simulation (MuJoCo replaces PyBullet)
+mujoco>=3.1.0
+gymnasium>=0.29.0
+numpy>=1.24.0
+stable-baselines3>=2.0.0
+torch>=2.0.0
+
+# Visualisation (evaluate_mujoco.py uses OpenCV for headless rendering)
+opencv-python>=4.8.0
+
+# Legacy PyBullet environment (kept for reference; not required for MuJoCo)
+pybullet>=3.2.5
+
+# Plotting (optional; PyBullet IR GUI uses matplotlib)
+matplotlib>=3.7.0
+
+# Raspberry Pi deployment (install on Pi only — Hack Lab kit)
+# gpiozero>=2.0        # Robot class for IN1/IN2 L298N wiring (no separate ENA/ENB needed)
+# RPi.GPIO>=0.7.1      # backend for gpiozero
+# spidev>=3.6          # SPI for MCP3008 ADC (only needed if using analogue IR sensors)
