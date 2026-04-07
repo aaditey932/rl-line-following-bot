@@ -10,6 +10,7 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from line_follow_env_mujoco import (
     EnvConfig,
@@ -146,6 +147,7 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--n-epochs", type=int, default=10)
 
+    parser.add_argument("--n-envs", type=int, default=1)
     parser.add_argument("--reproducible", action="store_true")
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--render-fps", type=float, default=50.0)
@@ -166,16 +168,24 @@ def main() -> None:
         f"domain_rand={sim2real.domain_randomization}"
     )
 
-    def make_env():
-        return LineFollowEnvMuJoCo(
-            render_mode="human" if args.render else None,
-            sim2real=sim2real,
-            env_config=env_config,
-            verbose_episode=not args.quiet,
-            render_fps=args.render_fps,
-        )
+    def make_env(rank: int = 0):
+        def _init():
+            return LineFollowEnvMuJoCo(
+                render_mode="human" if (args.render and rank == 0) else None,
+                sim2real=sim2real,
+                env_config=env_config,
+                verbose_episode=(not args.quiet and rank == 0),
+                render_fps=args.render_fps,
+            )
+        return _init
 
-    env = make_env()
+    n_envs = max(1, args.n_envs)
+    if n_envs == 1:
+        env = DummyVecEnv([make_env(0)])
+    else:
+        env = SubprocVecEnv([make_env(i) for i in range(n_envs)], start_method="fork")
+    print(f"Using {n_envs} parallel env(s)")
+
     lr_end = args.learning_rate if args.learning_rate_end is None else args.learning_rate_end
     lr_schedule = linear_lr(args.learning_rate, lr_end)
 
@@ -187,7 +197,7 @@ def main() -> None:
         learning_rate=lr_schedule,
         ent_coef=args.entropy_start,
         n_steps=args.n_steps,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size * n_envs,
         n_epochs=args.n_epochs,
     )
 

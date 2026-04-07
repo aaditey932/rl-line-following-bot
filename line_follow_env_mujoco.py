@@ -656,31 +656,49 @@ class TrackGeometry:
         )
 
     def nearest_point_and_tangent(self, px: float, py: float) -> tuple[float, float, float, float, float, float]:
+        # Vectorised over all segments
         p = np.array([px, py], dtype=np.float64)
-        best_dist2 = float("inf")
-        best = None
-        for idx, (start, vec, seg_len, tan) in enumerate(
-            zip(self.segment_starts, self.segment_vectors, self.segment_lengths, self.segment_tangents)
-        ):
-            rel = p - start
-            t = float(np.clip(np.dot(rel, vec) / max(seg_len * seg_len, 1e-9), 0.0, 1.0))
-            proj = start + t * vec
-            diff = p - proj
-            dist2 = float(np.dot(diff, diff))
-            if dist2 < best_dist2:
-                normal = np.array([-tan[1], tan[0]], dtype=np.float64)
-                best_dist2 = dist2
-                best = (
-                    float(proj[0]),
-                    float(proj[1]),
-                    float(tan[0]),
-                    float(tan[1]),
-                    float(np.dot(diff, normal)),
-                    float(self.cumulative_s[idx] + t * seg_len),
-                )
-        if best is None:
-            raise RuntimeError("Failed to project onto track")
-        return best
+        rel = p[None, :] - self.segment_starts          # (N,2)
+        seg_len2 = self.segment_lengths ** 2             # (N,)
+        t = np.clip(
+            np.einsum("ni,ni->n", rel, self.segment_vectors) / np.maximum(seg_len2, 1e-9),
+            0.0, 1.0,
+        )                                                 # (N,)
+        proj = self.segment_starts + t[:, None] * self.segment_vectors  # (N,2)
+        diff = p[None, :] - proj                         # (N,2)
+        dist2 = np.einsum("ni,ni->n", diff, diff)        # (N,)
+        idx = int(np.argmin(dist2))
+        tan = self.segment_tangents[idx]
+        normal = np.array([-tan[1], tan[0]], dtype=np.float64)
+        d = diff[idx]
+        return (
+            float(proj[idx, 0]),
+            float(proj[idx, 1]),
+            float(tan[0]),
+            float(tan[1]),
+            float(np.dot(d, normal)),
+            float(self.cumulative_s[idx] + t[idx] * self.segment_lengths[idx]),
+        )
+
+    def nearest_points_batch(self, pts: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Vectorised batch projection. pts: (M,2) -> lat_d: (M,), s_along: (M,), idx: (M,)"""
+        # pts (M,2), segment_starts (N,2), segment_vectors (N,2)
+        M = len(pts)
+        rel = pts[:, None, :] - self.segment_starts[None, :, :]   # (M,N,2)
+        seg_len2 = self.segment_lengths ** 2                        # (N,)
+        dot_rv = np.einsum("mni,ni->mn", rel, self.segment_vectors) # (M,N)
+        t = np.clip(dot_rv / np.maximum(seg_len2[None, :], 1e-9), 0.0, 1.0)  # (M,N)
+        proj = self.segment_starts[None, :, :] + t[:, :, None] * self.segment_vectors[None, :, :]  # (M,N,2)
+        diff = pts[:, None, :] - proj                               # (M,N,2)
+        dist2 = np.einsum("mni,mni->mn", diff, diff)                # (M,N)
+        best_idx = np.argmin(dist2, axis=1)                         # (M,)
+        m_idx = np.arange(M)
+        best_diff = diff[m_idx, best_idx, :]                        # (M,2)
+        best_tan = self.segment_tangents[best_idx]                  # (M,2)
+        normal = np.stack([-best_tan[:, 1], best_tan[:, 0]], axis=1)  # (M,2)
+        lat_d = np.einsum("mi,mi->m", best_diff, normal)            # (M,)
+        s_along = self.cumulative_s[best_idx] + t[m_idx, best_idx] * self.segment_lengths[best_idx]  # (M,)
+        return lat_d, s_along, best_idx
 
     def point_and_tangent_at_s(self, s: float) -> tuple[np.ndarray, np.ndarray]:
         s = float(np.clip(s, 0.0, self.length))
@@ -856,48 +874,61 @@ class LineFollowEnvMuJoCo(gym.Env):
         return pts
 
     def _scene_intensity(self, world_pts: np.ndarray) -> np.ndarray:
-        results = np.empty(len(world_pts), dtype=np.float64)
+        # Fully vectorised — no Python loop over points
         denom = max(self._ep_ir_white - self._ep_ir_black, 1e-6)
-        for i, pt in enumerate(world_pts):
-            _, _, _, _, lat_d, s_along = self._track.nearest_point_and_tangent(float(pt[0]), float(pt[1]))
+        lat_d, s_along, _ = self._track.nearest_points_batch(world_pts)  # (M,)
+
+        # Edge waviness
+        if self._edge_wav_amp > 0:
+            k = 2.0 * math.pi / max(self._edge_wav_wl, 1e-6)
+            p0, p1 = self._edge_wav_phase
+            wav_off = self._edge_wav_amp * (
+                0.75 * np.sin(k * s_along + p0) + 0.25 * np.sin(0.5 * k * s_along + p1)
+            )
+        else:
             wav_off = 0.0
-            if self._edge_wav_amp > 0:
-                k = 2.0 * math.pi / max(self._edge_wav_wl, 1e-6)
-                p0, p1 = self._edge_wav_phase
-                wav_off = self._edge_wav_amp * (
-                    0.75 * math.sin(k * s_along + p0) + 0.25 * math.sin(0.5 * k * s_along + p1)
-                )
-            eff_d = lat_d - wav_off
-            sigma = max(self._ep_edge_scale, 1e-6)
-            mix = float(self._sigmoid(np.array([(self._ep_line_hw - abs(eff_d)) / sigma], dtype=np.float64))[0])
+        eff_d = lat_d - wav_off
+        sigma = max(self._ep_edge_scale, 1e-6)
+        mix = 1.0 / (1.0 + np.exp(-np.clip((self._ep_line_hw - np.abs(eff_d)) / sigma, -60.0, 60.0)))
 
-            floor_bias = 0.0
-            if self._floor_bias_amp > 0:
-                k = 2.0 * math.pi / max(self._floor_bias_wl, 1e-6)
-                p0, p1, p2 = self._floor_bias_phase
-                x, y = float(pt[0]), float(pt[1])
-                floor_bias = self._floor_bias_amp * (
-                    0.55 * math.sin(k * x + p0)
-                    + 0.30 * math.sin(k * y + p1)
-                    + 0.15 * math.sin(k * (0.7 * x + 0.3 * y) + p2)
-                )
+        # Floor bias
+        x, y = world_pts[:, 0], world_pts[:, 1]
+        if self._floor_bias_amp > 0:
+            k = 2.0 * math.pi / max(self._floor_bias_wl, 1e-6)
+            p0, p1, p2 = self._floor_bias_phase
+            floor_bias = self._floor_bias_amp * (
+                0.55 * np.sin(k * x + p0)
+                + 0.30 * np.sin(k * y + p1)
+                + 0.15 * np.sin(k * (0.7 * x + 0.3 * y) + p2)
+            )
+        else:
+            floor_bias = np.zeros(len(world_pts), dtype=np.float64)
+
+        if self._floor_fine_amp > 0:
+            p0, p1 = self._floor_fine_phase
+            fine_noise = self._floor_fine_amp * np.sin(29.0 * x + p0) * np.sin(23.0 * y + p1)
+        else:
             fine_noise = 0.0
-            if self._floor_fine_amp > 0:
-                p0, p1 = self._floor_fine_phase
-                fine_noise = self._floor_fine_amp * math.sin(29.0 * pt[0] + p0) * math.sin(23.0 * pt[1] + p1)
-            floor_r = float(np.clip(self._ep_ir_white + floor_bias + fine_noise, 0.0, 1.0))
 
+        floor_r = np.clip(self._ep_ir_white + floor_bias + fine_noise, 0.0, 1.0)
+
+        # Line wear
+        if self._line_wear_amp > 0:
+            k = 2.0 * math.pi / max(self._line_wear_wl, 1e-6)
+            p0, p1 = self._line_wear_phase
+            wear = self._line_wear_amp * (
+                0.7 * np.sin(k * s_along + p0) + 0.3 * np.sin(0.5 * k * s_along + p1)
+            )
+        else:
             wear = 0.0
-            if self._line_wear_amp > 0:
-                k = 2.0 * math.pi / max(self._line_wear_wl, 1e-6)
-                p0, p1 = self._line_wear_phase
-                wear = self._line_wear_amp * (
-                    0.7 * math.sin(k * s_along + p0) + 0.3 * math.sin(0.5 * k * s_along + p1)
-                )
-            line_r = float(np.clip(self._ep_ir_black + wear + 0.2 * floor_bias, 0.0, max(floor_r - 1e-3, 1e-3)))
-            reflectance = floor_r * (1.0 - mix) + line_r * mix
-            results[i] = float(np.clip((reflectance - self._ep_ir_black) / denom, 0.0, 1.0))
-        return results
+
+        line_r = np.clip(
+            self._ep_ir_black + wear + 0.2 * floor_bias,
+            0.0,
+            np.maximum(floor_r - 1e-3, 1e-3),
+        )
+        reflectance = floor_r * (1.0 - mix) + line_r * mix
+        return np.clip((reflectance - self._ep_ir_black) / denom, 0.0, 1.0)
 
     def _compute_ir(self, add_noise: bool) -> np.ndarray:
         samples = self._ir_sensor_world_samples()
