@@ -2,6 +2,25 @@
 
 This repository trains a PPO policy for a differential-drive robot to follow a black line using IR-style reflectance observations. Training runs in simulation (MuJoCo by default, PyBullet as an alternative); you can deploy the saved policy on a Raspberry Pi with the wiring patterns documented below (Hack Lab–style hardware).
 
+## Sim-to-real
+
+### Platforms
+
+The project spans **simulated and physical embodiment**. Training uses **MuJoCo** (primary) or **PyBullet** (alternative) to model a differential-drive robot whose observations stack IR-style reflectance with wheel speeds and delayed motor commands. The **physical** stack is a Raspberry Pi with L298N drive and reflective IR sensors, run via `pi_deploy.py`. The trained PPO policy is meant to transfer to that hardware when observations and low-level dynamics match what the agent saw in sim.
+
+### Task: navigation vs grasping and balance
+
+Line following belongs to **navigation**: stay on a marked path using onboard sensing, with rewards and termination tied to tracking the strip. **Grasping** in contrast emphasizes contact-rich manipulation—gripper pose, forces, and object variation—in action and observation spaces that look nothing like a 1-D line cue. **Balance** tasks (e.g. pole or posture stabilization) stress underactuated, high-bandwidth stabilization; here the difficulty is rather **where the line is** and how steering commands propagate through motors at a fixed control rate under PPO. The prompt’s examples frame the breadth of embodied RL; this repository instantiates the **mobile, perception-driven** slice.
+
+### Sim-to-real challenges here
+
+- **Observation shift**: Real tape, lighting, sensor noise, and comparator or ADC thresholds rarely match simulated reflectance. Mismatched **IR count**, spacing, or calibration versus training breaks the policy input distribution. Mitigations in-repo include scene randomization (and presets), noise/ADC/comparator options in `Sim2RealConfig`, and building the on-Pi observation the same way as in sim (`pi_deploy.py`, including `obs_from_hardware` alignment).
+- **Dynamics and actuation**: Voltage drop, friction spread, deadband, PWM resolution, and **latency** are simplified or absent in sim. The environments model **action delay** and **PWM-first-order** motor dynamics so policies are not tuned only to ideal, instantaneous wheel commands.
+- **Geometry and contact**: Curves, slip, and chassis details (e.g. casters) may disagree with rigid-body assumptions; track diversity (e.g. MuJoCo `track_type`) reduces straight-line overfitting.
+- **Protocol mismatch**: Different `line_half_width`, `motor_dynamics`, or JSON defaults between train, eval, and the Pi cause brittle failure. `EnvConfig` and `Sim2RealConfig` (and CLI merges) should be carried consistently end to end.
+
+For a concrete **alignment checklist** (sensors, motors, delay, randomization, config paths), skip ahead to **Sim-to-real and train/eval alignment** at the end of this README.
+
 ## Features
 
 - **MuJoCo simulation** (recommended, matches `requirements.txt`): curved and multi-segment tracks, scene and physics randomization presets, PWM-oriented motor dynamics, JSON task and sim-to-real configs.
@@ -182,7 +201,7 @@ ADC chip select (SPI0, analogue mode): GPIO 8 (CE0). Override pins with `--left-
 
 ## Sim-to-real and train/eval alignment
 
-Use one checklist for both “make sim realistic” and “avoid train/eval drift”:
+The checklist below operationalizes the transfer challenges summarized in **Embodiment, task domain, and sim-to-real** above. Use it for both “make sim realistic” and “avoid train/eval drift”:
 
 - Match **`n_ir_sensors`** / `--ir-sensors` and **line geometry** (`--line-width-m`, `line_half_width`).
 - Match **motor dynamics** (`motor_dynamics`, deadband, time constants) and **`action_delay_steps`** / `--action-delay` to the robot’s control loop.
