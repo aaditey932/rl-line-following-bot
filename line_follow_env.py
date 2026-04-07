@@ -462,15 +462,6 @@ class LineFollowEnv(gym.Env):
         m = np.array(p.getMatrixFromQuaternion(orn), dtype=np.float64).reshape(3, 3)
         return m
 
-    def _reflectance_from_signed_dist(self, d: np.ndarray) -> np.ndarray:
-        """Map signed perpendicular distance (m) to [0,1] reflectance; black strip near d=0."""
-        lo, hi = self._ir_scene_reflectance_bounds()
-        w = self._episode_line_half_width
-        sigma = max(self._episode_ir_edge_scale, 1e-6)
-        u = np.abs(d)
-        t = _sigmoid((w - u) / sigma)
-        return hi * (1.0 - t) + lo * t
-
     def _ir_scene_reflectance_bounds(self) -> tuple[float, float]:
         lo = float(np.clip(self._episode_ir_black + self._global_light_bias, 0.0, 0.95))
         hi = float(np.clip(self._episode_ir_white + self._global_light_bias, 0.05, 1.0))

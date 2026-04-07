@@ -62,14 +62,6 @@ RESET_MIN_SINGLE_MULT = 2.0
 RESET_FALLBACK_PERP = (0.0, 0.06, -0.06, 0.10, -0.10, 0.12, -0.12)
 
 
-def _clip01(x: np.ndarray | float) -> np.ndarray | float:
-    return np.clip(x, 0.0, 1.0)
-
-
-def _range_center(bounds: tuple[float, float]) -> float:
-    return 0.5 * (float(bounds[0]) + float(bounds[1]))
-
-
 def _json_unknown_keys(raw: dict[str, Any], allowed: set[str]) -> list[str]:
     return sorted(k for k in raw if not k.startswith("_") and k not in allowed)
 
@@ -1219,7 +1211,7 @@ class LineFollowEnvMuJoCo(gym.Env):
         return point, tangent, s
 
     def _place_robot(self) -> None:
-        point, tangent, ref_s = self._reference_track_pose()
+        point, tangent, _ = self._reference_track_pose()
         path_yaw = math.atan2(tangent[1], tangent[0])
         normal = np.array([-tangent[1], tangent[0]], dtype=np.float64)
         for _ in range(self.ec.reset_tries):

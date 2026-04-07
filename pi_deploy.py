@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import argparse
 import time
-import math
 import signal
 import sys
 from pathlib import Path
@@ -66,8 +65,6 @@ DT = 1.0 / CONTROL_HZ
 
 # Match the value used during training (EnvConfig.wheel_vel_max)
 WHEEL_VEL_MAX = 18.0          # rad/s  (top wheel speed at full duty)
-WHEEL_RADIUS  = 0.033         # m  (TT motor wheel, 65 mm diameter)
-WHEEL_BASELINE = 0.14         # m  (approx left-right distance for kit chassis)
 
 N_IR = 5                      # number of IR sensors
 
