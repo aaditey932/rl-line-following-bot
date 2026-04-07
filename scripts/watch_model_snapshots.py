@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Watch a Stable-Baselines3 save path (e.g. models/ppo_line_follow → models/ppo_line_follow.zip).
+Watch a Stable-Baselines3 save path (e.g. models/ppo_mujoco → models/ppo_mujoco.zip).
 Whenever the zip changes, copy it to a numbered snapshot: 1.zip, 2.zip, ... in --dest-dir.
 
 Training can keep using the same --save path; this script only copies, never moves the main file.
@@ -47,13 +47,13 @@ def main() -> None:
     parser.add_argument(
         "--save-prefix",
         type=str,
-        default="models/ppo_line_follow",
-        help="Same as train.py --save (without .zip); watched file is <prefix>.zip",
+        default="models/ppo_mujoco",
+        help="Same as train_mujoco.py --save (without .zip); watched file is <prefix>.zip",
     )
     parser.add_argument(
         "--dest-dir",
         type=str,
-        default="models/ppo_line_follow_snapshots",
+        default="models/ppo_mujoco_snapshots",
         help="Directory for numbered copies 1.zip, 2.zip, ...",
     )
     parser.add_argument("--poll", type=float, default=1.0, help="Seconds between checks")

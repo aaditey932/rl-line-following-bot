@@ -1,12 +1,12 @@
 # RL Line Following Bot
 
-This repository trains a PPO policy for a differential-drive robot to follow a black line using IR-style reflectance observations. Training runs in simulation (MuJoCo by default, PyBullet as an alternative); you can deploy the saved policy on a Raspberry Pi with the wiring patterns documented below (Hack Lab–style hardware).
+This repository trains a PPO policy for a differential-drive robot to follow a black line using IR-style reflectance observations. Training runs in **MuJoCo** simulation; you can deploy the saved policy on a Raspberry Pi with the wiring patterns documented below (Hack Lab–style hardware).
 
 ## Sim-to-real
 
 ### Platforms
 
-The project spans **simulated and physical embodiment**. Training uses **MuJoCo** (primary) or **PyBullet** (alternative) to model a differential-drive robot whose observations stack IR-style reflectance with wheel speeds and delayed motor commands. The **physical** stack is a Raspberry Pi with L298N drive and reflective IR sensors, run via `pi_deploy.py`. The trained PPO policy is meant to transfer to that hardware when observations and low-level dynamics match what the agent saw in sim.
+The project spans **simulated and physical embodiment**. Training uses **MuJoCo** to model a differential-drive robot whose observations stack IR-style reflectance with wheel speeds and delayed motor commands. The **physical** stack is a Raspberry Pi with L298N drive and reflective IR sensors, run via `pi_deploy.py`. The trained PPO policy is meant to transfer to that hardware when observations and low-level dynamics match what the agent saw in sim.
 
 ### Task: navigation vs grasping and balance
 
@@ -15,17 +15,15 @@ Line following belongs to **navigation**: stay on a marked path using onboard se
 ### Sim-to-real challenges here
 
 - **Observation shift**: Real tape, lighting, sensor noise, and comparator or ADC thresholds rarely match simulated reflectance. Mismatched **IR count**, spacing, or calibration versus training breaks the policy input distribution. Mitigations in-repo include scene randomization (and presets), noise/ADC/comparator options in `Sim2RealConfig`, and building the on-Pi observation the same way as in sim (`pi_deploy.py`, including `obs_from_hardware` alignment).
-- **Dynamics and actuation**: Voltage drop, friction spread, deadband, PWM resolution, and **latency** are simplified or absent in sim. The environments model **action delay** and **PWM-first-order** motor dynamics so policies are not tuned only to ideal, instantaneous wheel commands.
-- **Geometry and contact**: Curves, slip, and chassis details (e.g. casters) may disagree with rigid-body assumptions; track diversity (e.g. MuJoCo `track_type`) reduces straight-line overfitting.
+- **Dynamics and actuation**: Voltage drop, friction spread, deadband, PWM resolution, and **latency** are simplified or absent in sim. The environment models **action delay** and **PWM-first-order** motor dynamics so policies are not tuned only to ideal, instantaneous wheel commands.
+- **Geometry and contact**: Curves, slip, and chassis details may disagree with rigid-body assumptions; track diversity (e.g. MuJoCo `track_type`) reduces straight-line overfitting.
 - **Protocol mismatch**: Different `line_half_width`, `motor_dynamics`, or JSON defaults between train, eval, and the Pi cause brittle failure. `EnvConfig` and `Sim2RealConfig` (and CLI merges) should be carried consistently end to end.
 
 For a concrete **alignment checklist** (sensors, motors, delay, randomization, config paths), skip ahead to **Sim-to-real and train/eval alignment** at the end of this README.
 
 ## Features
 
-- **MuJoCo simulation** (recommended, matches `requirements.txt`): curved and multi-segment tracks, scene and physics randomization presets, PWM-oriented motor dynamics, JSON task and sim-to-real configs.
-- **PyBullet simulation**: same observation layout idea (IR channels plus wheel state and delayed commands), separate `train.py` / `evaluate.py` and JSON configs for experiments or comparison.
-- **Structured configs**: `mujoco_env_config.json` / `mujoco_sim2real_config.json` (MuJoCo) and `environment_config.json` / `sim2real_config.json` (PyBullet); CLI flags merge on top of defaults.
+- **MuJoCo simulation**: curved and multi-segment tracks, scene and physics randomization presets, PWM-oriented motor dynamics, JSON task and sim-to-real configs (`mujoco_env_config.json`, `mujoco_sim2real_config.json`).
 - **Deployment**: `pi_deploy.py` runs the policy on-device with digital comparator IR modules or MCP3008 ADC inputs and L298N drive via `gpiozero`.
 
 ## Installation
@@ -37,35 +35,26 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-You need a working **MuJoCo** install (`mujoco` Python package loads native libraries; follow [MuJoCo](https://mujoco.readthedocs.io/) setup for your OS). **PyBullet** is listed for the optional Bullet environment; you can skip it if you only use MuJoCo.
+You need a working **MuJoCo** install (`mujoco` Python package loads native libraries; follow [MuJoCo](https://mujoco.readthedocs.io/) setup for your OS).
 
 ## Repository layout
 
 | Path | Role |
 |------|------|
 | `line_follow_env_mujoco.py` | MuJoCo Gymnasium environment |
-| `train_mujoco.py` | PPO training (MuJoCo) |
+| `train_mujoco.py` | PPO training |
 | `evaluate_mujoco.py` | Rollout, optional viewer / video |
-| `mujoco_env_config.json` | Default MuJoCo task config (`EnvConfig`) |
-| `mujoco_sim2real_config.json` | Default MuJoCo sim-to-real config (`Sim2RealConfig`) |
+| `mujoco_env_config.json` | Default task config (`EnvConfig`) |
+| `mujoco_sim2real_config.json` | Default sim-to-real config (`Sim2RealConfig`) |
 | `robots/diff_drive.xml` | MuJoCo robot / scene |
-| `line_follow_env.py` | PyBullet environment |
-| `train.py` | PPO training (PyBullet) |
-| `evaluate.py` | PyBullet evaluation |
-| `environment_config.json` | Default PyBullet task config |
-| `sim2real_config.json` | Default PyBullet sim-to-real config |
-| `robots/diff_drive.urdf` | PyBullet robot model |
 | `pi_deploy.py` | Raspberry Pi deployment |
 | `requirements.txt` | Python dependencies |
 | `scripts/watch_model_snapshots.py` | Copy changing `*.zip` saves to numbered snapshots |
-| `scripts/diagnose_reset_lateral.py` | Debug reset lateral error vs IR layout (PyBullet) |
-| `scripts/vision_train_eval.sh` | Example PyBullet train then eval |
+| `scripts/vision_train_eval.sh` | Example train then eval (MuJoCo) |
 
-## Simulation backends
+## Training and evaluation
 
 Run training and evaluation from the repository root so default JSON config paths resolve. Use `--help` on each script for the full flag list.
-
-### MuJoCo (recommended)
 
 - **Scripts**: `train_mujoco.py`, `evaluate_mujoco.py`
 - **Defaults**: `train_mujoco.py` uses `--timesteps` **1_000_000** and `--save` **`models/ppo_mujoco`** unless overridden. Config files `mujoco_env_config.json` and `mujoco_sim2real_config.json` are loaded when present.
@@ -105,29 +94,15 @@ python3 evaluate_mujoco.py --model models/ppo_mujoco --deterministic --save-vide
 
 Notable options (see `--help` for the rest): `--track-type`, `--ir-sensors`, `--motor-dynamics`, `--scene-rand`, `--domain-rand`, `--scene-preset`, `--physics-preset`, `--action-delay`, `--randomize-path`, `--ir-noise`, `--ir-digital`, `--quiet`.
 
-### PyBullet (alternative)
-
-- **Scripts**: `train.py`, `evaluate.py`
-- **Defaults**: `train.py` uses `--timesteps` **100_000** and `--save` **`models/ppo_line_follow`**. Defaults load `environment_config.json` and `sim2real_config.json` when present.
-
-Example:
-
-```bash
-python3 train.py --timesteps 100000 --save models/ppo_line_follow
-python3 evaluate.py --model models/ppo_line_follow --deterministic
-```
-
-**Reward** in `line_follow_env.py` combines several shaped terms (not a single forward-speed product): lateral tracking, forward progress gated by line visibility, a bonus for positive forward acceleration, line-recovery and alive terms, minus command smoothness / bad-tracking / terminal penalties. Weights come from `EnvConfig` (and JSON), e.g. `ir_progress_weight`, `forward_accel_reward_weight`, `ir_sensor_lateral_weight`.
+**Reward** in `line_follow_env_mujoco.py` combines several shaped terms (not a single forward-speed product): lateral tracking, forward progress gated by line visibility, a bonus for positive forward acceleration, line-recovery and alive terms, minus command smoothness / bad-tracking / terminal penalties. Weights come from `EnvConfig` (and JSON), e.g. `ir_progress_weight`, `forward_accel_reward_weight`, `ir_sensor_lateral_weight`.
 
 **Sim-to-real flags**: `--domain-rand` randomizes mass, friction, gravity, motor scaling, wheel velocity limits, and rear joint damping. `--scene-rand` randomizes IR scene appearance (reflectance, line width, floor texture, sensor drift). `--action-delay` adds buffered previous commands in steps.
 
-**IR count**: CLI and `environment_config.json` default **`n_ir_sensors` = 2** for PyBullet, versus **5** in the default MuJoCo JSON. Observation dimension is **`n_ir_sensors + 4`** for both backends (see below).
-
 ## Observation and action
 
-The observation is **`n_ir_sensors` IR channels in [0, 1]** (black line vs white floor), plus **four** values in **[-1, 1]**: normalized left and right wheel angular velocities and the previous normalized motor commands (after any action delay). With default **`N` IR sensors**, the vector length is **`N + 4`** (e.g. **9** when `N = 5` in MuJoCo, **6** when `N = 2` in PyBullet).
+The observation is **`n_ir_sensors` IR channels in [0, 1]** (black line vs white floor), plus **four** values in **[-1, 1]**: normalized left and right wheel angular velocities and the previous normalized motor commands (after any action delay). The default MuJoCo JSON uses **`n_ir_sensors` = 5**, so the vector length is **9** (**`n_ir_sensors + 4`**).
 
-Actions are **`[left_cmd, right_cmd]`** in **`[-1, 1]`**, mapped to wheel velocity targets according to each environment’s `wheel_vel_max` (and related sim-to-real motor dynamics).
+Actions are **`[left_cmd, right_cmd]`** in **`[-1, 1]`**, mapped to wheel velocity targets according to the environment’s `wheel_vel_max` (and related sim-to-real motor dynamics).
 
 ## Raspberry Pi deployment
 
@@ -208,4 +183,4 @@ The checklist below operationalizes the transfer challenges summarized in **Embo
 - Match **track** settings (`track_type`, `randomize_path`) and **randomization** (`--scene-rand`, `--domain-rand`, or presets / JSON) between training and evaluation.
 - Keep **sim2real** and **env** JSON paths consistent, or pass the same CLI overrides in both phases; MuJoCo loads `mujoco_env_config.json` and `mujoco_sim2real_config.json` by default when run from the repo root.
 
-Mitigations in brief: PWM-first motor models and delay for actuator lag; scene randomization for lighting and tape variation; domain randomization for friction and inertia spread; curved tracks so policies do not only see straight lines; MuJoCo’s contact-rich actuation vs older Bullet control modes if you compare backends.
+Mitigations in brief: PWM-first motor models and delay for actuator lag; scene randomization for lighting and tape variation; domain randomization for friction and inertia spread; curved tracks so policies do not only see straight lines.

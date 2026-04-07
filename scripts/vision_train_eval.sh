@@ -3,5 +3,5 @@
 # (Avoids zsh paste issues with # comment lines — use bash or: setopt interactivecomments in zsh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-python train.py --timesteps 100000 --save models/ppo_line_follow_ir
-python evaluate.py --model models/ppo_line_follow_ir
+python train_mujoco.py --timesteps 1000000 --save models/ppo_mujoco
+python evaluate_mujoco.py --model models/ppo_mujoco --deterministic --episodes 5
